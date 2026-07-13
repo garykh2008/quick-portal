@@ -1,0 +1,9 @@
+node_modules
+uploads
+.git
+.gitignore
+Dockerfile
+users.json
+widget.py
+*.log
+.gemini

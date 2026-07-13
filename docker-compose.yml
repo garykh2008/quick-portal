@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  quick-portal:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: quick-portal
+    ports:
+      - "5001:3000"
+    volumes:
+      - /opt/quick-portal/data:/app/data
+      - /opt/quick-portal/uploads:/app/uploads
+    restart: unless-stopped

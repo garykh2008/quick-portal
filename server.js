@@ -12,10 +12,17 @@ const wss = new WebSocket.Server({ server });
 
 const PORT = process.env.PORT || 3000;
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
+const DATA_DIR = process.env.DATA_DIR || __dirname;
+const USERS_FILE_PATH = path.join(DATA_DIR, 'users.json');
 
 // 確保 uploads 目錄存在
 if (!fs.existsSync(UPLOADS_DIR)) {
   fs.mkdirSync(UPLOADS_DIR);
+}
+
+// 確保資料目錄存在
+if (!fs.existsSync(DATA_DIR)) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
 // 多用戶記憶體資料庫：username -> { password, textHistory: [], fileDatabase: {}, devices: Map(ip -> { name, lastActive }) }
@@ -33,7 +40,7 @@ function saveUsersToDisk() {
     };
   });
   try {
-    fs.writeFileSync(path.join(__dirname, 'users.json'), JSON.stringify(data, null, 2), 'utf8');
+    fs.writeFileSync(USERS_FILE_PATH, JSON.stringify(data, null, 2), 'utf8');
   } catch (err) {
     console.error('Failed to save users to disk:', err);
   }
@@ -41,10 +48,9 @@ function saveUsersToDisk() {
 
 // 輔助工具：自 users.json 載入使用者資料
 function loadUsersFromDisk() {
-  const filePath = path.join(__dirname, 'users.json');
-  if (fs.existsSync(filePath)) {
+  if (fs.existsSync(USERS_FILE_PATH)) {
     try {
-      const fileContent = fs.readFileSync(filePath, 'utf8');
+      const fileContent = fs.readFileSync(USERS_FILE_PATH, 'utf8');
       const data = JSON.parse(fileContent);
       Object.keys(data).forEach(username => {
         users.set(username, {
