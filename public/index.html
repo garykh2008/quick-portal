@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Quick Portal - 跨裝置快速傳送門</title>
+  <!-- Google Fonts: Outfit -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <!-- Lucide Icons (CDN) -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <!-- Main Stylesheet -->
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="glass-bg-glow"></div>
+  <div class="app-container" id="app">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="logo-area">
+        <i data-lucide="zap" class="icon-logo"></i>
+        <h1>Quick Portal</h1>
+        <span class="badge" id="mode-badge">完整模式</span>
+      </div>
+      
+      <div class="device-naming">
+        <span>裝置名稱:</span>
+        <input type="text" id="local-nickname" placeholder="本機名稱" title="點擊修改裝置名稱" class="input-nickname">
+      </div>
+      
+      <div class="connection-status">
+        <div class="status-indicator online" id="status-dot"></div>
+        <span id="status-text">正在連線...</span>
+        <span class="peer-count-badge" id="peer-count">0 Peers</span>
+      </div>
+
+      <div class="header-actions">
+        <button id="btn-open-widget" class="btn btn-secondary" title="開啟桌面懸浮小工具">
+          <i data-lucide="external-link"></i>
+          <span>懸浮小工具</span>
+        </button>
+      </div>
+      
+      <!-- Widget Mode Tabs (Visible only in Widget Mode) -->
+      <div class="widget-tabs" id="widget-tabs">
+        <button class="tab-btn active" id="tab-btn-send" title="傳送分頁">
+          <i data-lucide="send"></i><span>傳送</span>
+        </button>
+        <button class="tab-btn" id="tab-btn-receive" title="接收分頁">
+          <i data-lucide="download-cloud"></i><span>接收</span>
+          <div class="badge-dot hidden" id="unread-dot"></div>
+        </button>
+      </div>
+    </header>
+
+    <!-- Global Target Selector (Visible only in Widget Mode) -->
+    <div class="global-target-bar" id="global-target-bar">
+      <span>傳送目標:</span>
+      <select id="global-target-select" class="select-target">
+        <option value="all">📢 廣播 (All/Server)</option>
+      </select>
+    </div>
+
+    <!-- Main Content Grid -->
+    <main class="app-grid">
+      <!-- Left Panel: Text & URL Share -->
+      <section class="panel-card" id="panel-text">
+        <div class="panel-header">
+          <i data-lucide="message-square-code"></i>
+          <h2>文字與網址共享</h2>
+        </div>
+        
+        <div class="panel-body">
+          <div class="share-input-group" id="share-input-group">
+            <div class="universal-input-wrapper" id="universal-input-wrapper">
+              <textarea id="text-input" placeholder="打字/貼上網址，或在此拖放/貼上 (Ctrl+V) 檔案..." rows="4"></textarea>
+              <div class="drag-overlay" id="drag-overlay">🚀 放開以發送檔案</div>
+            </div>
+            <div class="input-actions">
+              <div class="target-select-container">
+                <select id="text-target-select" class="select-target">
+                  <option value="all">📢 廣播給所有人 (All)</option>
+                </select>
+              </div>
+              <span class="char-count" id="char-count">0 字</span>
+              <button id="btn-send-text" class="btn btn-primary">
+                <i data-lucide="send"></i>
+                <span>發送</span>
+              </button>
+            </div>
+          </div>
+          <!-- Widget Active Card (Visible only in Widget Mode) -->
+          <div class="widget-active-card" id="widget-active-card">
+            <div class="widget-card-header">
+              <span>最新收到內容:</span>
+              <span class="widget-meta" id="widget-clipboard-meta">無</span>
+            </div>
+            <div class="widget-card-body">
+              <div class="widget-card-text" id="widget-clipboard-text">等待接收內容...</div>
+              <div class="widget-card-actions">
+                <button class="btn-icon" id="widget-btn-copy" title="複製內容"><i data-lucide="copy"></i></button>
+                <a href="" target="_blank" class="btn-icon" id="widget-btn-open" title="在新分頁開啟" style="display:none;"><i data-lucide="external-link"></i></a>
+              </div>
+            </div>
+            <!-- Floating/Inline History Dropdown (Shown inline under Receive tab) -->
+            <div class="widget-history-dropdown" id="widget-history-dropdown">
+              <div class="widget-history-list" id="widget-history-list">
+                <!-- 歷史項目會動態加入此處 -->
+              </div>
+            </div>
+          </div>
+          <div class="history-section">
+            <h3>共享歷史</h3>
+            <div class="history-list" id="text-history-list">
+              <div class="empty-state">
+                <i data-lucide="inbox"></i>
+                <p>目前沒有共享的文字或網址</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Right Panel: File Transit -->
+      <section class="panel-card" id="panel-files">
+        <div class="panel-header">
+          <i data-lucide="folder-git-2"></i>
+          <h2>檔案傳遞空間</h2>
+          <span class="channel-type" id="channel-type">Server 暫存</span>
+        </div>
+
+        <div class="panel-body">
+          <!-- Dropzone -->
+          <div class="file-dropzone" id="dropzone">
+            <input type="file" id="file-input" class="hidden-file-input" multiple>
+            <div class="dropzone-content">
+              <i data-lucide="cloud-lightning" class="dropzone-icon"></i>
+              <p class="dropzone-main-text">拖曳檔案至此，或<span>點擊瀏覽</span></p>
+              <p class="dropzone-sub-text">P2P 模式下不限大小 | 暫存模式單檔上限 500MB</p>
+            </div>
+          </div>
+
+          <!-- File Target Selector -->
+          <div class="file-target-container">
+            <span class="target-label">傳送目標:</span>
+            <select id="file-target-select" class="select-target">
+              <option value="server">☁️ 上傳至 Server 暫存 (Everyone)</option>
+            </select>
+          </div>
+
+          <!-- Active Uploading Progress -->
+          <div class="upload-progress-container hidden" id="progress-container">
+            <div class="progress-info">
+              <span id="progress-filename">filename.zip</span>
+              <span id="progress-percent">0%</span>
+            </div>
+            <div class="progress-bar-bg">
+              <div class="progress-bar-fill" id="progress-fill"></div>
+            </div>
+          </div>
+
+          <!-- File List -->
+          <div class="file-list-section">
+            <h3>已共享的檔案</h3>
+            <div class="file-list" id="shared-file-list">
+              <div class="empty-state">
+                <i data-lucide="file-warning"></i>
+                <p>目前沒有共享的檔案</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+    
+    <!-- Footer -->
+    <footer class="app-footer-bar">
+      <p>Quick Portal &copy; 2026 | 專為個人高效工作流設計</p>
+      <div id="connection-info">Server IP: 取得中...</div>
+    </footer>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div class="toast-container" id="toast-container"></div>
+
+  <script src="app.js"></script>
+  <script>
+    // 初始化 Lucide Icons
+    lucide.createIcons();
+  </script>
+</body>
+</html>
