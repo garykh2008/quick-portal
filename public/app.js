@@ -3,8 +3,9 @@ let socket;
 let clientId = null;
 let myNickname = '';
 let activePeers = 0;
-let peerList = []; // 格式：[{ deviceId, nickname }]
+let peerList = []; // 格式：[{ ip, name, isOnline }]
 let connectionMode = 'server'; // 'server' 或 'p2p'
+let currentUser = null; // 當前登入的使用者帳號
 
 // 儲存所有與其他 Peer 的 WebRTC 連線 { peerId: { pc, dc } }
 const rtcConnections = new Map();
@@ -73,6 +74,230 @@ const rtcConfig = {
     { urls: 'stun:stun1.l.google.com:19302' }
   ]
 };
+
+// 認證與裝置 DOM
+const authStatusContainer = document.getElementById('auth-status-container');
+const authDisplayName = document.getElementById('auth-display-name');
+const btnAuthLogout = document.getElementById('btn-auth-logout');
+const authModal = document.getElementById('auth-modal');
+const authForm = document.getElementById('auth-form');
+const authInputUser = document.getElementById('auth-input-user');
+const authInputPass = document.getElementById('auth-input-pass');
+const authErrorMsg = document.getElementById('auth-error-msg');
+const btnAuthSubmit = document.getElementById('btn-auth-submit');
+const linkAuthToggle = document.getElementById('link-auth-toggle');
+const authToggleText = document.getElementById('auth-toggle-text');
+const authModalTitle = document.getElementById('auth-modal-title');
+const deviceDropdown = document.getElementById('device-dropdown');
+const deviceListContainer = document.getElementById('device-list-container');
+
+// 裝置清單下拉與外部點擊關閉
+if (peerCountBadge && deviceDropdown) {
+  peerCountBadge.addEventListener('click', (e) => {
+    e.stopPropagation();
+    deviceDropdown.classList.toggle('active');
+  });
+  document.addEventListener('click', () => {
+    deviceDropdown.classList.remove('active');
+  });
+  deviceDropdown.addEventListener('click', (e) => {
+    e.stopPropagation();
+  });
+}
+
+let isRegistering = false;
+
+if (linkAuthToggle) {
+  linkAuthToggle.addEventListener('click', (e) => {
+    e.preventDefault();
+    isRegistering = !isRegistering;
+    if (isRegistering) {
+      authModalTitle.innerHTML = '<i data-lucide="user-plus"></i> 使用者註冊';
+      btnAuthSubmit.textContent = '註冊並登入';
+      authToggleText.textContent = '已有帳號？';
+      linkAuthToggle.textContent = '立即登入';
+    } else {
+      authModalTitle.innerHTML = '<i data-lucide="user-check"></i> 使用者登入';
+      btnAuthSubmit.textContent = '登入';
+      authToggleText.textContent = '沒有帳號？';
+      linkAuthToggle.textContent = '立即註冊';
+    }
+    authErrorMsg.classList.add('hidden');
+    lucide.createIcons();
+  });
+}
+
+if (btnAuthSubmit) {
+  btnAuthSubmit.addEventListener('click', async () => {
+    const username = authInputUser.value.trim();
+    const password = authInputPass.value;
+    if (!username || !password) return;
+
+    const url = isRegistering ? '/api/auth/register' : '/api/auth/login';
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        currentUser = data.username;
+        authModal.classList.add('hidden');
+        showToast(isRegistering ? '註冊成功並登入' : '登入成功', 'success');
+        
+        // 更新 UI 顯示
+        authDisplayName.textContent = currentUser;
+        btnAuthLogout.style.display = 'inline';
+        
+        // 觸發 WebSoket 連線
+        initWebSocket();
+      } else {
+        authErrorMsg.textContent = data.error || '認證失敗';
+        authErrorMsg.classList.remove('hidden');
+      }
+    } catch (err) {
+      console.error(err);
+      authErrorMsg.textContent = '伺服器連線失敗';
+      authErrorMsg.classList.remove('hidden');
+    }
+  });
+}
+
+if (btnAuthLogout) {
+  btnAuthLogout.addEventListener('click', async (e) => {
+    e.preventDefault();
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+      currentUser = null;
+      authDisplayName.textContent = '未登入';
+      btnAuthLogout.style.display = 'none';
+      if (socket) socket.close();
+      checkAuthStatus();
+    } catch (err) {
+      console.error(err);
+    }
+  });
+}
+
+// 檢查使用者認證狀態
+async function checkAuthStatus() {
+  try {
+    const res = await fetch('/api/auth/me');
+    const data = await res.json();
+    if (data.loggedIn) {
+      currentUser = data.username;
+      authDisplayName.textContent = currentUser;
+      btnAuthLogout.style.display = 'inline';
+      authModal.classList.add('hidden');
+      initWebSocket();
+    } else {
+      currentUser = null;
+      authDisplayName.textContent = '未登入';
+      btnAuthLogout.style.display = 'none';
+      authModal.classList.remove('hidden');
+    }
+  } catch (err) {
+    console.error('Check auth failed:', err);
+  }
+}
+
+// 渲染裝置清單抽屜
+function renderDeviceList(peers) {
+  if (!deviceListContainer) return;
+  if (peers.length === 0) {
+    deviceListContainer.innerHTML = '<div class="loading-placeholder">目前無其他登錄裝置</div>';
+    return;
+  }
+
+  deviceListContainer.innerHTML = '';
+  peers.forEach(peer => {
+    const isSelf = peer.ip === clientId;
+    const isOnline = peer.isOnline;
+    
+    const item = document.createElement('div');
+    item.className = 'device-item';
+    item.innerHTML = `
+      <div class="device-info">
+        <div class="device-meta-row">
+          <div class="device-status-dot ${isOnline ? 'online' : ''}" title="${isOnline ? '在線' : '離線'}"></div>
+          <span class="device-name-container" title="${peer.name}">${peer.name}</span>
+          ${isSelf ? '<span class="device-item-self">本機</span>' : ''}
+        </div>
+        <span class="device-ip">${peer.ip}</span>
+      </div>
+      <div class="device-actions">
+        <button class="btn-icon btn-rename-device" data-ip="${peer.ip}" data-name="${peer.name}" title="修改暱稱">
+          <i data-lucide="edit-3"></i>
+        </button>
+        ${!isSelf ? `
+          <button class="btn-icon btn-delete-device" data-ip="${peer.ip}" title="刪除裝置">
+            <i data-lucide="trash-2"></i>
+          </button>
+        ` : ''}
+      </div>
+    `;
+    deviceListContainer.appendChild(item);
+  });
+
+  lucide.createIcons();
+
+  // 綁定暱稱修改事件
+  deviceListContainer.querySelectorAll('.btn-rename-device').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const ip = btn.getAttribute('data-ip');
+      const oldName = btn.getAttribute('data-name');
+      const newName = prompt('請輸入新的裝置暱稱:', oldName);
+      if (newName && newName.trim() && newName !== oldName) {
+        try {
+          const res = await fetch('/api/auth/device/rename', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ip, name: newName.trim() })
+          });
+          const data = await res.json();
+          if (data.success) {
+            showToast('暱稱修改成功', 'success');
+            if (ip === clientId && localNicknameInput) {
+              localNicknameInput.value = newName.trim();
+              myNickname = newName.trim();
+            }
+          } else {
+            showToast(data.error || '暱稱修改失敗', 'error');
+          }
+        } catch (err) {
+          console.error(err);
+        }
+      }
+    });
+  });
+
+  // 綁定刪除裝置事件
+  deviceListContainer.querySelectorAll('.btn-delete-device').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const ip = btn.getAttribute('data-ip');
+      if (confirm(`確認要解綁並刪除 IP 為 \${ip} 的裝置嗎？`)) {
+        try {
+          const res = await fetch('/api/auth/device/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ip })
+          });
+          const data = await res.json();
+          if (data.success) {
+            showToast('裝置刪除成功', 'success');
+          } else {
+            showToast(data.error || '裝置刪除失敗', 'error');
+          }
+        } catch (err) {
+          console.error(err);
+        }
+      }
+    });
+  });
+}
 
 // 1. 初始化與模式判斷
 const urlParams = new URLSearchParams(window.location.search);
@@ -232,14 +457,13 @@ function getPeerNickname(id) {
 function initWebSocket() {
   const deviceId = getOrCreateDeviceId();
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsUrl = `${protocol}//${window.location.host}/?deviceId=${deviceId}&nickname=${encodeURIComponent(myNickname)}`;
+  const wsUrl = `${protocol}//${window.location.host}/?deviceId=${deviceId}&username=${encodeURIComponent(currentUser || '')}&nickname=${encodeURIComponent(myNickname)}`;
   
   socket = new WebSocket(wsUrl);
 
   socket.onopen = () => {
     updateStatus('online', '已連線至伺服器');
     connectionInfo.textContent = `Server: ${window.location.host}`;
-    sendNicknameUpdate(myNickname);
   };
 
   socket.onclose = () => {
@@ -255,13 +479,46 @@ function initWebSocket() {
   socket.onmessage = (event) => {
     const data = JSON.parse(event.data);
     
+    // 若收到需要認證的訊息，直接彈出 Modal 阻斷
+    if (data.type === 'require-auth') {
+      currentUser = null;
+      authDisplayName.textContent = '未登入';
+      btnAuthLogout.style.display = 'none';
+      authModal.classList.remove('hidden');
+      if (socket) socket.close();
+      return;
+    }
+    
     switch (data.type) {
       case 'init':
         clientId = data.clientId; 
         activePeers = data.activePeers;
+        
+        // 優先使用後端資料庫登記的最新自訂暱稱，更新本地變數與 UI
+        if (data.nickname) {
+          myNickname = data.nickname;
+          localStorage.setItem('quick-portal-nickname', myNickname);
+          if (localNicknameInput) {
+            localNicknameInput.value = myNickname;
+          }
+        }
+        
+        // 安全初始化 peerList，解決 init 與 peer-update 的 Race Condition
+        if (data.peers) {
+          peerList = data.peers.filter(p => p.deviceId !== clientId);
+        }
+        if (data.deviceList) {
+          renderDeviceList(data.deviceList);
+        }
+        
         updatePeerCount(activePeers);
         updateTextHistory(data.textHistory);
         updateFileList(data.files);
+        
+        // 立即發起 WebRTC 直連連線
+        updateTargetSelectors();
+        manageRTCConnections();
+        
         isInitDone = true; // 初始化完畢，開始監聽未讀
         break;
 
@@ -269,6 +526,11 @@ function initWebSocket() {
         activePeers = data.activePeers;
         peerList = data.peers.filter(p => p.deviceId !== clientId);
         updatePeerCount(activePeers);
+        
+        // 渲染下拉裝置面板
+        if (data.deviceList) {
+          renderDeviceList(data.deviceList);
+        }
         
         updateTargetSelectors();
         manageRTCConnections();
@@ -431,7 +693,13 @@ function initiateRTCConnection(targetPeerId) {
   };
 
   pc.onconnectionstatechange = () => {
-    console.log(`[RTC] Connection state with ${targetPeerId}: ${pc.connectionState}`);
+    const state = pc.connectionState;
+    console.log(`[RTC] Connection state with ${targetPeerId}: ${state}`);
+    if (state === 'failed') {
+      showToast(`P2P 直連失敗 (同台電腦受限，請改用 Server 暫存)`, 'warning');
+    } else if (state === 'connected') {
+      showToast(`P2P 直連已開通！`, 'success');
+    }
     checkConnectionMode();
   };
 
@@ -460,7 +728,13 @@ function handleRTCSignal(senderPeerId, signalData) {
       };
 
       pc.onconnectionstatechange = () => {
-        console.log(`[RTC] Connection state with ${senderPeerId}: ${pc.connectionState}`);
+        const state = pc.connectionState;
+        console.log(`[RTC] Connection state with ${senderPeerId}: ${state}`);
+        if (state === 'failed') {
+          showToast(`P2P 直連失敗 (同台電腦受限，請改用 Server 暫存)`, 'warning');
+        } else if (state === 'connected') {
+          showToast(`P2P 直連已開通！`, 'success');
+        }
         checkConnectionMode();
       };
 
@@ -547,15 +821,72 @@ function handleDataChannelMessage(data, peerId) {
         triggerUnreadDot();
         break;
 
+      case 'p2p-file-request':
+        const reqTransferId = msg.transferId;
+        const reqFilename = msg.filename;
+        const reqSize = msg.size;
+        const reqSender = getPeerNickname(peerId);
+        
+        // 使用自訂的 HTML Modal 代替瀏覽器 Native Confirm，防超小視窗截斷且視覺精美
+        showP2pConfirmModal(reqSender, reqFilename, reqSize, () => {
+          // 同意回呼 (Accept)
+          fileTransfers[reqTransferId] = {
+            filename: reqFilename,
+            size: reqSize,
+            receivedSize: 0,
+            chunks: [],
+            peerId: peerId
+          };
+          const conn = rtcConnections.get(peerId);
+          if (conn && conn.dc && conn.dc.readyState === 'open') {
+            conn.dc.send(JSON.stringify({
+              type: 'p2p-file-accept',
+              transferId: reqTransferId
+            }));
+          }
+        }, () => {
+          // 拒絕回呼 (Reject)
+          const conn = rtcConnections.get(peerId);
+          if (conn && conn.dc && conn.dc.readyState === 'open') {
+            conn.dc.send(JSON.stringify({
+              type: 'p2p-file-reject',
+              transferId: reqTransferId
+            }));
+          }
+        });
+        break;
+
+      case 'p2p-file-accept':
+        const acceptTransferId = msg.transferId;
+        const acceptFile = pendingFileSends.get(acceptTransferId);
+        const activeConn = rtcConnections.get(peerId);
+        if (acceptFile && activeConn && activeConn.dc && activeConn.dc.readyState === 'open') {
+          sendFileP2P(acceptFile, activeConn.dc, acceptTransferId);
+          pendingFileSends.delete(acceptTransferId);
+        }
+        break;
+
+      case 'p2p-file-reject':
+        const rejectTransferId = msg.transferId;
+        const rejectFile = pendingFileSends.get(rejectTransferId);
+        if (rejectFile) {
+          showToast(`對方拒絕接收檔案「${rejectFile.name}」`, 'error');
+          pendingFileSends.delete(rejectTransferId);
+        }
+        break;
+
       case 'file-start':
         const transferId = msg.transferId;
-        fileTransfers[transferId] = {
-          filename: msg.filename,
-          size: msg.size,
-          receivedSize: 0,
-          chunks: [],
-          peerId: peerId
-        };
+        // 如果前面 confirm 後還沒有初始化，在此予以防呆初始化
+        if (!fileTransfers[transferId]) {
+          fileTransfers[transferId] = {
+            filename: msg.filename,
+            size: msg.size,
+            receivedSize: 0,
+            chunks: [],
+            peerId: peerId
+          };
+        }
         showProgressUI(msg.filename);
         updateProgressUI(0);
         showToast(`開始接收來自 ${getPeerNickname(peerId)} 的檔案...`, 'info');
@@ -600,14 +931,32 @@ function handleDataChannelMessage(data, peerId) {
   }
 }
 
-// P2P 檔案分片傳送
-async function sendFileP2P(file, dc) {
+// 暫存 P2P 直連傳送任務
+const pendingFileSends = new Map();
+
+// P2P 檔案傳輸請求發起 (先尋求接收端確認同意)
+function requestSendFileP2P(file, dc) {
   const transferId = `tf-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
+  pendingFileSends.set(transferId, file);
+  
+  dc.send(JSON.stringify({
+    type: 'p2p-file-request',
+    transferId,
+    filename: file.name,
+    size: file.size
+  }));
+  
+  showToast(`等待對方接受檔案「${file.name}」...`, 'info');
+}
+
+// P2P 檔案分片傳送 (改由對方確認同意後呼叫)
+async function sendFileP2P(file, dc, transferId) {
+  const tid = transferId || `tf-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
   const CHUNK_SIZE = 16384; 
   
   dc.send(JSON.stringify({
     type: 'file-start',
-    transferId,
+    transferId: tid,
     filename: file.name,
     size: file.size
   }));
@@ -1136,7 +1485,10 @@ function renderWidgetHistoryList() {
           if (isWidgetMode && window.pywebview && window.pywebview.api) {
             e.preventDefault();
             const downloadName = dlBtn.getAttribute('download') || item.text;
-            window.pywebview.api.download_file_via_python(dlBtn.getAttribute('href'), downloadName);
+            const rawUrl = dlBtn.getAttribute('href');
+            const sep = rawUrl.includes('?') ? '&' : '?';
+            const authenticatedUrl = `${rawUrl}${sep}username=${encodeURIComponent(currentUser || '')}`;
+            window.pywebview.api.download_file_via_python(authenticatedUrl, downloadName);
           }
         });
       }
@@ -1275,9 +1627,11 @@ function handleFilesSelection(files) {
     const targetConn = rtcConnections.get(fileTargetVal);
     
     if (targetConn && targetConn.dc && targetConn.dc.readyState === 'open') {
-      sendFileP2P(file, targetConn.dc);
+      requestSendFileP2P(file, targetConn.dc);
     } else {
-      alert(`連線狀態未就緒！無法直接傳送檔案給該裝置。請切換為「廣播」模式傳送。`);
+      const state = (targetConn && targetConn.pc) ? targetConn.pc.connectionState : '未發起';
+      const dcState = (targetConn && targetConn.dc) ? targetConn.dc.readyState : '無通道';
+      alert(`【P2P 直連未就緒】\n當前 WebRTC 狀態：${state} (DataChannel: ${dcState})\n\n說明：\n1. 若您是在「同台電腦」上同時開啟大網頁和小工具，因瀏覽器安全沙盒限制本機迴環，P2P 直連將無法建立，請選擇「☁️ 上傳至 Server 暫存」對傳。\n2. 若是跨裝置，請確認兩台電腦在同一個區域網路，且防火牆未封鎖 UDP 傳輸。`);
     }
   }
 }
@@ -1347,9 +1701,9 @@ function formatBytes(bytes, decimals = 2) {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
 }
 
-// 10. 啟動與暱稱初始化
+// 10. 啟動與暱稱及認證初始化
 initLocalNickname();
-initWebSocket();
+checkAuthStatus();
 
 // 註冊 Service Worker
 if ('serviceWorker' in navigator) {
@@ -1371,12 +1725,55 @@ if (widgetBtnOpen) {
         // 分流：如果有 download 屬性，走 python 默默下載
         if (widgetBtnOpen.hasAttribute('download')) {
           const downloadName = widgetBtnOpen.getAttribute('download') || 'downloaded_file';
-          window.pywebview.api.download_file_via_python(href, downloadName);
+          const sep = href.includes('?') ? '&' : '?';
+          const authenticatedUrl = `${href}${sep}username=${encodeURIComponent(currentUser || '')}`;
+          window.pywebview.api.download_file_via_python(authenticatedUrl, downloadName);
         } else {
           // 否則走外部瀏覽器開啟 (如開啟網址)
           window.pywebview.api.open_in_browser(href);
         }
       }
     }
+  });
+}
+
+// 實作自訂的 P2P 傳輸確認對話框 (防止 WebView2 系統 Confirm 對話框在超小視窗下被截斷)
+function showP2pConfirmModal(sender, filename, size, onAccept, onReject) {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.style.zIndex = '2500'; // 確保超越一切圖層在最最上層
+
+  overlay.innerHTML = `
+    <div class="modal-content glass-card" style="width:260px; max-width:90%;">
+      <div class="modal-header" style="padding:0.4rem 0.6rem;">
+        <h3 style="font-size:0.85rem;color:#00f2fe;display:flex;align-items:center;gap:0.4rem;margin:0;">
+          <i data-lucide="download-cloud" style="width:14px;height:14px;"></i> P2P 傳送請求
+        </h3>
+      </div>
+      <div class="modal-body" style="padding:0.6rem; gap:0.4rem; font-size:0.75rem; text-align:center;">
+        <p style="margin:0 0 0.4rem 0;color:var(--text-color);">來自「<strong>${escapeHtml(sender)}</strong>」的檔案傳送請求：</p>
+        <div style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.05); padding:0.4rem; border-radius:6px; margin-bottom:0.5rem; text-align:left; word-break:break-all;">
+          <div style="color:var(--text-color);">📄 <b>檔名:</b> ${escapeHtml(filename)}</div>
+          <div style="margin-top:0.2rem;color:var(--text-muted);">💾 <b>大小:</b> ${formatBytes(size)}</div>
+        </div>
+        <div style="display:flex; gap:0.4rem; width:100%; margin-top:0.25rem;">
+          <button class="btn btn-secondary" id="btn-p2p-reject" style="flex:1; padding:0.35rem; font-size:0.75rem;margin:0;">拒絕</button>
+          <button class="btn btn-primary" id="btn-p2p-accept" style="flex:1; padding:0.35rem; font-size:0.75rem;margin:0;">接受</button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+  lucide.createIcons();
+
+  overlay.querySelector('#btn-p2p-accept').addEventListener('click', () => {
+    overlay.remove();
+    onAccept();
+  });
+
+  overlay.querySelector('#btn-p2p-reject').addEventListener('click', () => {
+    overlay.remove();
+    onReject();
   });
 }

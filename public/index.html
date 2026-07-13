@@ -35,11 +35,29 @@
         <span class="peer-count-badge" id="peer-count">0 Peers</span>
       </div>
 
+      <!-- 使用者認證狀態 -->
+      <div class="auth-status" id="auth-status-container">
+        <i data-lucide="user" class="icon-user"></i>
+        <span class="auth-username" id="auth-display-name">未登入</span>
+        <a href="#" id="btn-auth-logout" class="btn-auth-logout" style="display:none;" title="登出">(登出)</a>
+      </div>
+
       <div class="header-actions">
         <button id="btn-open-widget" class="btn btn-secondary" title="開啟桌面懸浮小工具">
           <i data-lucide="external-link"></i>
           <span>懸浮小工具</span>
         </button>
+      </div>
+
+      <!-- 裝置列表下拉面板 (點擊 Peers 狀態觸發展開) -->
+      <div class="device-dropdown card" id="device-dropdown">
+        <div class="dropdown-header">
+          <h4>📱 您的裝置清單</h4>
+          <span class="dropdown-tip">同一區網 IP 會自動歸戶</span>
+        </div>
+        <div class="device-list scrollbar" id="device-list-container">
+          <div class="loading-placeholder">載入中...</div>
+        </div>
       </div>
       
       <!-- Widget Mode Tabs (Visible only in Widget Mode) -->
@@ -183,6 +201,33 @@
 
   <!-- Toast Notification Container -->
   <div class="toast-container" id="toast-container"></div>
+
+  <!-- 👤 註冊與登入對話框 (Modal) -->
+  <div class="modal-overlay hidden" id="auth-modal">
+    <div class="modal-content glass-card">
+      <div class="modal-header">
+        <h3 id="auth-modal-title"><i data-lucide="user-check"></i> 使用者登入</h3>
+      </div>
+      <div class="modal-body">
+        <form id="auth-form" onsubmit="return false;">
+          <div class="input-field-group">
+            <label for="auth-input-user">帳號名稱 (Username)</label>
+            <input type="text" id="auth-input-user" required placeholder="請輸入帳號名稱..." autocomplete="username">
+          </div>
+          <div class="input-field-group">
+            <label for="auth-input-pass">安全密碼 (Password)</label>
+            <input type="password" id="auth-input-pass" required placeholder="請輸入密碼..." autocomplete="current-password">
+          </div>
+          <div class="auth-error-msg hidden" id="auth-error-msg">帳號或密碼錯誤</div>
+          <button type="submit" class="btn btn-primary" id="btn-auth-submit">登入</button>
+        </form>
+        <div class="auth-toggle-tip">
+          <span id="auth-toggle-text">沒有帳號？</span>
+          <a href="#" id="link-auth-toggle">立即註冊</a>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <script src="app.js"></script>
   <script>
