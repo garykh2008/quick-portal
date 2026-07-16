@@ -25,8 +25,8 @@
     }
     
     .app-container, body.widget-mode .app-container {
-      height: auto !important; /* 由內容撐開高度，方便動態自適應 */
-      min-height: auto !important;
+      height: 100vh !important; /* 強制與視窗物理高度 100% 等高，防止底部邊框與圓角被截斷 */
+      min-height: 100vh !important;
       border-radius: 0px !important;
       border: 1px solid rgba(0, 242, 254, 0.25);
       box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
@@ -36,12 +36,15 @@
       overflow: hidden;
       display: flex;
       flex-direction: column;
+      padding-top: 22px !important;
+      position: relative !important;
+      box-sizing: border-box !important;
     }
 
     /* 頂部精美拖曳條 (使用足夠的 Alpha 避免 WebView2 點擊穿透 Bug) */
     .window-drag-bar {
       height: 22px;
-      width: 100%;
+      width: 100% !important;
       background: rgba(12, 18, 36, 0.96) !important;
       border-bottom: 1px solid rgba(0, 242, 254, 0.3);
       display: flex;
@@ -50,7 +53,10 @@
       cursor: move;
       user-select: none;
       -webkit-app-region: drag;
-      position: relative;
+      position: absolute !important;
+      top: 0 !important;
+      left: 0 !important;
+      z-index: 20000;
     }
     
     .drag-handle-indicator {
@@ -97,6 +103,14 @@
     }
     .peer-count-badge, .widget-tabs, .input-nickname {
       pointer-events: auto; /* 保留這些控制項的點擊互動 */
+    }
+
+    /* 小工具專屬遮罩層調整：下移 22px 避免蓋住頂部拖曳欄與關閉按鈕，改為 absolute 以配合視窗自適應 */
+    .modal-overlay {
+      position: absolute !important;
+      top: 22px !important;
+      height: calc(100% - 22px) !important;
+      width: 100% !important;
     }
 
     /* 小工具專屬高質感登入頁面美化 */

@@ -5,7 +5,7 @@
   "identifier": "com.quickportal.widget",
   "build": {
     "frontendDist": "../public",
-    "devUrl": "http://localhost:3000/widget.html",
+    "devUrl": null,
     "beforeDevCommand": "",
     "beforeBuildCommand": ""
   },
@@ -16,7 +16,7 @@
         "title": "Quick Portal",
         "url": "widget.html",
         "width": 320,
-        "height": 200,
+        "height": 294,
         "resizable": true,
         "fullscreen": false,
         "decorations": false,

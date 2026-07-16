@@ -4,8 +4,8 @@ let SERVER_HOST = '';
 {
   const h = window.location.hostname;
   const proto = window.location.protocol;
-  // Tauri 生產版本使用 tauri://localhost，開發版使用 tauri.localhost (http)
-  if (h === 'tauri.localhost' || proto === 'tauri:' || proto === 'file:') {
+  // 優雅且 100% 絕對可靠的判定：只要有 window.__TAURI__ (Tauri 注入的全域變數) 或特定 protocol，一律視為小工具，連向 VDS
+  if (window.__TAURI__ || h === 'tauri.localhost' || proto === 'tauri:' || proto === 'file:') {
     SERVER_HOST = REMOTE_SERVER;
   } else {
     SERVER_HOST = window.location.origin;
@@ -364,6 +364,17 @@ function renderDeviceList(peers) {
 const urlParams = new URLSearchParams(window.location.search);
 const isWidgetMode = urlParams.get('mode') === 'widget' || window.innerWidth < 450 || window.location.pathname.includes('widget.html');
 
+// 如果是在小工具模式下，強力註銷所有已註冊的 Service Worker，並清除其快取，以防 WebView2 載入舊版快取資源或引發自訂協議載入異常
+if (isWidgetMode && 'serviceWorker' in navigator) {
+  navigator.serviceWorker.getRegistrations().then(registrations => {
+    for (let registration of registrations) {
+      registration.unregister().then(() => {
+        console.log('[Tauri SW] 已註銷殘留的 Service Worker 舊快取！');
+      });
+    }
+  });
+}
+
 // Tauri 視窗自適應大小伸縮 (無邊框且防止網頁內容被視窗邊界截斷)
 function tauriResizeWindow(height) {
   if (window.__TAURI__ && window.__TAURI__.core) {
@@ -378,8 +389,17 @@ function fitWindowToContent() {
     setTimeout(() => {
       const container = document.getElementById('app');
       if (container) {
+        // 如果尚未完成登入認證，或是登入 Modal 正在顯示，視窗高度一律維持在 294px 的精確安全高度
+        // 這 100% 保證啟動與登入期間卡片不會被截斷，且拖曳欄與關閉 X 按鈕完全可見可點選，並保留了優雅對稱的上下呼吸邊界
+        const authModal = document.getElementById('auth-modal');
+        if (!currentUser || (authModal && !authModal.classList.contains('hidden'))) {
+          console.log('[Tauri Layout] 偵測到處於未登入狀態，強行將視窗高度鎖定在 294px');
+          tauriResizeWindow(294);
+          return;
+        }
         // 取得 app 容器的真實物理高度
         const height = Math.ceil(container.getBoundingClientRect().height);
+        console.log('[Tauri Layout] 偵測到已登入，動態伸縮適應高度為:', height);
         tauriResizeWindow(height);
       }
     }, 50);
@@ -442,14 +462,24 @@ if (isWidgetMode && tabBtnSend && tabBtnReceive) {
 
 // 小工具關閉按鈕事件監聽 (Tauri 全域 API 關閉視窗)
 if (windowCloseBtn) {
+  console.log('[Tauri Init] 關閉按鈕 DOM 已尋獲，正在綁定事件。');
   windowCloseBtn.addEventListener('click', (e) => {
+    console.log('[Tauri Trigger] 關閉按鈕被點擊！');
     e.stopPropagation();
-    if (window.__TAURI__ && window.__TAURI__.core) {
-      window.__TAURI__.core.invoke('close_window');
-    } else {
-      window.close();
+    try {
+      if (window.__TAURI__ && window.__TAURI__.core) {
+        console.log('[Tauri Trigger] 正在呼叫 Rust close_window 命令');
+        window.__TAURI__.core.invoke('close_window');
+      } else {
+        console.warn('[Tauri Trigger] 未檢測到 Tauri 環境，使用 window.close() 退路方式');
+        window.close();
+      }
+    } catch (err) {
+      console.error('[Tauri Trigger] 關閉視窗拋出錯誤：', err);
     }
   });
+} else {
+  console.error('[Tauri Init] 找不到關閉按鈕 DOM (#window-close-btn)！');
 }
 
 // 未讀通知紅點觸發函式 (加強 log 便於排查)
@@ -1851,6 +1881,9 @@ function formatBytes(bytes, decimals = 2) {
 
 // 10. 啟動與暱稱及認證初始化
 initLocalNickname();
+if (typeof lucide !== 'undefined') {
+  lucide.createIcons();
+}
 // 在 Tauri 獨立執行檔中，WebView2 需要一小段時間完成初始化後才能 fetch
 // 若立即呼叫會觸發短暫的「無法連線」錯誤畫面，延遲 600ms 可完全避免
 if (window.location.hostname === 'tauri.localhost' || window.location.protocol === 'tauri:') {
@@ -1859,8 +1892,8 @@ if (window.location.hostname === 'tauri.localhost' || window.location.protocol =
   checkAuthStatus();
 }
 
-// 註冊 Service Worker
-if ('serviceWorker' in navigator) {
+// 註冊 Service Worker (僅在 Web 模式下啟用，小工具桌面端禁用 Service Worker 以防與 tauri:// 自訂協議衝突)
+if (!isWidgetMode && 'serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/sw.js').catch(err => {
       console.log('SW registration failed: ', err);
