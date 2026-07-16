@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Quick Portal - 小工具</title>
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <!-- Lucide Icons -->
+  <script src="lucide.min.js"></script>
+  <!-- Main Stylesheet -->
+  <link rel="stylesheet" href="style.css">
+  <style>
+    /* 小工具專屬透明背景微調 */
+    body, body.widget-mode {
+      background: transparent !important;
+      overflow: hidden;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+      min-height: auto !important;
+      height: auto !important;
+    }
+    
+    .app-container, body.widget-mode .app-container {
+      height: auto !important; /* 由內容撐開高度，方便動態自適應 */
+      min-height: auto !important;
+      border-radius: 0px !important;
+      border: 1px solid rgba(0, 242, 254, 0.25);
+      box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
+      background: rgba(10, 15, 30, 0.85);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* 頂部精美拖曳條 (使用足夠的 Alpha 避免 WebView2 點擊穿透 Bug) */
+    .window-drag-bar {
+      height: 22px;
+      width: 100%;
+      background: rgba(12, 18, 36, 0.96) !important;
+      border-bottom: 1px solid rgba(0, 242, 254, 0.3);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: move;
+      user-select: none;
+      -webkit-app-region: drag;
+      position: relative;
+    }
+    
+    .drag-handle-indicator {
+      width: 60px;
+      height: 4px;
+      border-radius: 2px;
+      background: rgba(0, 242, 254, 0.7);
+      transition: background 0.2s;
+    }
+    .window-drag-bar:hover .drag-handle-indicator {
+      background: rgba(0, 242, 254, 1.0);
+    }
+
+    /* 頂部關閉按鈕樣式 */
+    .window-close-btn {
+      position: absolute;
+      right: 0;
+      top: 0;
+      height: 22px;
+      width: 32px;
+      background: transparent;
+      border: none;
+      color: rgba(255, 255, 255, 0.4);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s;
+      pointer-events: auto;
+      -webkit-app-region: no-drag;
+    }
+    .window-close-btn:hover {
+      background-color: #ef4444 !important;
+      color: #fff !important;
+    }
+    .window-close-btn i {
+      width: 12px;
+      height: 12px;
+    }
+
+    /* 視窗拖曳區域設定 */
+    .app-header {
+      cursor: move;
+    }
+    .peer-count-badge, .widget-tabs, .input-nickname {
+      pointer-events: auto; /* 保留這些控制項的點擊互動 */
+    }
+
+    /* 小工具專屬高質感登入頁面美化 */
+    #auth-modal .modal-content {
+      width: 260px !important;
+      max-width: 90% !important;
+      padding: 1.2rem !important;
+      border-radius: 16px !important;
+      background: rgba(15, 23, 42, 0.98) !important;
+      border: 1px solid rgba(0, 242, 254, 0.3) !important;
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.7) !important;
+      backdrop-filter: blur(25px) !important;
+    }
+    #auth-modal .modal-header h3 {
+      font-size: 0.9rem !important;
+      color: #00f2fe !important;
+      display: flex !important;
+      align-items: center !important;
+      gap: 0.4rem !important;
+      margin-bottom: 0.8rem !important;
+    }
+    #auth-modal .form-group input {
+      width: 100% !important;
+      background: rgba(255, 255, 255, 0.03) !important;
+      border: 1px solid rgba(255, 255, 255, 0.08) !important;
+      border-radius: 8px !important;
+      color: #ffffff !important;
+      padding: 0.5rem 0.7rem !important;
+      font-size: 0.75rem !important;
+      transition: all 0.25s !important;
+      box-sizing: border-box !important;
+    }
+    #auth-modal .form-group input:focus {
+      border-color: #00f2fe !important;
+      box-shadow: 0 0 10px rgba(0, 242, 254, 0.2) !important;
+      background: rgba(255, 255, 255, 0.05) !important;
+      outline: none !important;
+    }
+    #auth-modal #btn-auth-submit {
+      width: 100% !important;
+      padding: 0.55rem !important;
+      font-size: 0.8rem !important;
+      font-weight: 600 !important;
+      border-radius: 8px !important;
+      background: linear-gradient(135deg, #00f2fe 0%, #4facfe 100%) !important;
+      border: none !important;
+      color: #0a0f1d !important;
+      cursor: pointer !important;
+      transition: all 0.25s !important;
+      margin-top: 0.2rem !important;
+    }
+    #auth-modal #btn-auth-submit:hover {
+      transform: translateY(-1px) !important;
+      box-shadow: 0 4px 15px rgba(0, 242, 254, 0.4) !important;
+    }
+    #auth-modal .auth-toggle-tip {
+      margin-top: 0.6rem !important;
+      display: block !important;
+      text-align: center !important;
+      font-size: 0.65rem !important;
+      color: rgba(255, 255, 255, 0.5) !important;
+      width: 100% !important;
+    }
+    #auth-modal .auth-toggle-tip a {
+      color: #00f2fe !important;
+      text-decoration: none !important;
+      font-weight: 600 !important;
+      margin-left: 0.2rem !important;
+    }
+    #auth-modal .auth-toggle-tip a:hover {
+      text-decoration: underline !important;
+    }
+
+    /* 小工具專屬裝置列表下拉面板美化 */
+    #device-dropdown {
+      width: calc(100% - 0.8rem) !important;
+      left: 0.4rem !important;
+      right: 0.4rem !important;
+      background: rgba(15, 23, 42, 0.99) !important;
+      border: 1px solid rgba(0, 242, 254, 0.3) !important;
+      border-radius: 12px !important;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.7) !important;
+      backdrop-filter: blur(25px) !important;
+      margin-top: 0.25rem !important;
+    }
+    #device-dropdown .dropdown-header {
+      display: flex !important;
+      flex-direction: column !important;
+      gap: 0.15rem !important;
+      align-items: flex-start !important;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05) !important;
+      padding: 0.4rem 0.5rem !important;
+    }
+    #device-dropdown .dropdown-header h4 {
+      font-size: 0.75rem !important;
+      color: #00f2fe !important;
+      margin: 0 !important;
+    }
+    #device-dropdown .dropdown-tip {
+      font-size: 0.6rem !important;
+      color: rgba(255, 255, 255, 0.4) !important;
+      margin: 0 !important;
+    }
+    #device-dropdown .device-list {
+      padding: 0.3rem !important;
+      max-height: 140px !important;
+      overflow-y: auto !important;
+    }
+    /* 裝置清單內部 peer 項目排版 */
+    #device-dropdown .device-item {
+      display: flex !important;
+      align-items: center !important;
+      justify-content: space-between !important;
+      padding: 0.35rem 0.45rem !important;
+      border-radius: 6px !important;
+      background: rgba(255, 255, 255, 0.02) !important;
+      margin-bottom: 0.2rem !important;
+      border: 1px solid rgba(255, 255, 255, 0.04) !important;
+      font-size: 0.7rem !important;
+    }
+    #device-dropdown .device-item:hover {
+      background: rgba(255, 255, 255, 0.04) !important;
+      border-color: rgba(0, 242, 254, 0.2) !important;
+    }
+  </style>
+</head>
+<body class="widget-mode">
+  <div class="app-container" id="app">
+    <!-- 頂部專屬拖曳條 -->
+    <div class="window-drag-bar" data-tauri-drag-region>
+      <div class="drag-handle-indicator" data-tauri-drag-region></div>
+      <button class="window-close-btn" id="window-close-btn" title="關閉小工具">
+        <i data-lucide="x"></i>
+      </button>
+    </div>
+    <!-- Header (帶有 Tauri 拖曳區屬性) -->
+    <header class="app-header" data-tauri-drag-region>
+      <div class="logo-area" data-tauri-drag-region>
+        <i data-lucide="zap" class="icon-logo"></i>
+        <h1 data-tauri-drag-region>Quick Portal</h1>
+      </div>
+      
+      <div class="device-naming">
+        <input type="text" id="local-nickname" placeholder="本機名稱" title="點擊修改裝置名稱" class="input-nickname">
+      </div>
+      
+      <div class="connection-status" data-tauri-drag-region>
+        <div class="status-indicator online" id="status-dot"></div>
+        <span class="peer-count-badge" id="peer-count" style="cursor: pointer; pointer-events: auto;">0 Peers</span>
+      </div>
+
+      <!-- 裝置列表下拉面板 (點擊 Peers 狀態觸發展開) -->
+      <div class="device-dropdown card" id="device-dropdown">
+        <div class="dropdown-header">
+          <h4>📱 您的裝置清單</h4>
+          <span class="dropdown-tip">同一區網 IP 會自動歸戶</span>
+        </div>
+        <div class="device-list scrollbar" id="device-list-container">
+          <div class="loading-placeholder">載入中...</div>
+        </div>
+      </div>
+      
+      <!-- Widget Tabs -->
+      <div class="widget-tabs" id="widget-tabs">
+        <button class="tab-btn active" id="tab-btn-send" title="傳送分頁">
+          <i data-lucide="send"></i><span>傳送</span>
+        </button>
+        <button class="tab-btn" id="tab-btn-receive" title="接收分頁" style="position: relative;">
+          <i data-lucide="download-cloud"></i><span>接收</span>
+          <div class="badge-dot hidden" id="unread-dot"></div>
+        </button>
+      </div>
+    </header>
+
+    <!-- Global Target Selector -->
+    <div class="global-target-bar" id="global-target-bar">
+      <span>傳送目標:</span>
+      <select id="global-target-select" class="select-target">
+        <option value="all">📢 廣播 (All/Server)</option>
+      </select>
+    </div>
+
+    <!-- Main Container -->
+    <main class="app-grid" style="padding: 0.5rem; display: block; overflow: visible;">
+      <!-- Send View -->
+      <div class="share-input-group" id="share-input-group" style="margin: 0; display: block;">
+        <div class="universal-input-wrapper" id="universal-input-wrapper" style="margin-bottom: 0.4rem; position: relative;">
+          <textarea id="text-input" placeholder="貼上網址/打字，或在此拖放/貼上檔案..." style="height: 65px; min-height: 65px; max-height: 65px; resize: none; width: 100%; display: block;"></textarea>
+          <div class="drag-overlay" id="drag-overlay">🚀 放開以發送檔案</div>
+        </div>
+        <div class="input-actions" style="margin-top: 0.4rem; padding: 0;">
+          <span class="char-count" id="char-count">0 字</span>
+          <button id="btn-send-text" class="btn btn-primary" style="padding: 0.4rem 1rem;">
+            <i data-lucide="send"></i>
+            <span>發送</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Receive View -->
+      <div class="widget-active-card" id="widget-active-card" style="display: none; margin: 0; background: transparent; border: none; padding: 0;">
+        <div class="widget-card-header" style="padding: 0.2rem 0;">
+          <span>最新收到內容:</span>
+          <span class="widget-meta" id="widget-clipboard-meta">無</span>
+        </div>
+        <div class="widget-card-body" style="background: rgba(255, 255, 255, 0.02); border: 1px solid rgba(255, 255, 255, 0.05); padding: 0.5rem; border-radius: 8px; margin-bottom: 0.4rem;">
+          <div class="widget-card-text scrollbar" id="widget-clipboard-text" style="max-height: 55px; overflow-y: auto; font-size: 0.75rem; word-break: break-all;">等待接收內容...</div>
+          <div class="widget-card-actions" style="margin-top: 0.3rem;">
+            <button class="btn-icon" id="widget-btn-copy" title="複製內容"><i data-lucide="copy"></i></button>
+            <a href="" target="_blank" class="btn-icon" id="widget-btn-open" title="在新分頁開啟" style="display:none;"><i data-lucide="external-link"></i></a>
+          </div>
+        </div>
+        
+        <!-- Inline History List -->
+        <div class="widget-history-dropdown" id="widget-history-dropdown" style="display: block; position: static; width: 100%; border: none; background: transparent; box-shadow: none; padding: 0; margin-top: 0.2rem;">
+          <div class="widget-history-list scrollbar" id="widget-history-list" style="max-height: 120px; overflow-y: auto;">
+            <!-- 歷史項目動態插入 -->
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- 底部極簡狀態列 (僅在登入後顯示，保持頂部乾淨) -->
+    <footer class="widget-status-bar" id="widget-status-bar" style="display: none; align-items: center; justify-content: space-between; padding: 0.35rem 0.6rem; background: rgba(0, 0, 0, 0.25); border-top: 1px solid rgba(255, 255, 255, 0.05); font-size: 0.65rem; color: var(--text-muted);">
+      <div style="display: flex; align-items: center; gap: 0.25rem;">
+        <i data-lucide="user" style="width: 10px; height: 10px; color: #a5b4fc;"></i>
+        <span id="auth-display-name">未登入</span>
+      </div>
+      <button id="btn-auth-logout" class="btn-auth-logout" style="background: transparent; border: none; color: #f43f5e; cursor: pointer; display: flex; align-items: center; gap: 0.2rem; font-size: 0.65rem; padding: 0; pointer-events: auto;" title="登出">
+        <i data-lucide="log-out" style="width: 10px; height: 10px;"></i>
+        <span>登出</span>
+      </button>
+    </footer>
+
+    <!-- Active Uploading Progress -->
+    <div class="upload-progress-container hidden" id="progress-container" style="margin: 0 0.5rem 0.5rem 0.5rem; padding: 0.4rem; background: rgba(0,242,254,0.05); border: 1px solid rgba(0,242,254,0.15); border-radius: 6px;">
+      <div class="progress-info" style="font-size: 0.65rem; margin-bottom: 0.25rem;">
+        <span id="progress-filename" style="max-width: 180px; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">filename.zip</span>
+        <span id="progress-percent">0%</span>
+      </div>
+      <div class="progress-bar-bg" style="height: 4px;">
+        <div class="progress-bar-fill" id="progress-fill" style="height: 100%;"></div>
+      </div>
+    </div>
+
+    <!-- 登入驗證 Modal (小工具專用輕量玻璃風格) -->
+    <div class="modal-overlay hidden" id="auth-modal" style="z-index: 3000;">
+      <div class="modal-content glass-card" style="width: 260px; padding: 1rem; border-radius: 12px;">
+        <div class="modal-header" style="margin-bottom: 0.8rem;">
+          <h3 id="auth-modal-title" style="font-size: 0.9rem; color: #00f2fe; display: flex; align-items: center; gap: 0.4rem; margin: 0;">
+            <i data-lucide="user-check" style="width:16px;height:16px;"></i> 使用者登入
+          </h3>
+        </div>
+        <form id="auth-form" onsubmit="return false;" style="display: flex; flex-direction: column; gap: 0.5rem;">
+          <div class="form-group" style="margin: 0;">
+            <input type="text" id="auth-input-user" placeholder="帳號" required style="font-size: 0.75rem; padding: 0.4rem 0.6rem; border-radius: 6px;" autocomplete="username">
+          </div>
+          <div class="form-group" style="margin: 0;">
+            <input type="password" id="auth-input-pass" placeholder="密碼" required style="font-size: 0.75rem; padding: 0.4rem 0.6rem; border-radius: 6px;" autocomplete="current-password">
+          </div>
+          <div class="auth-error-msg hidden" id="auth-error-msg" style="font-size: 0.65rem; color: #ef4444; margin: 0;"></div>
+          <div style="display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.4rem; width: 100%;">
+            <button type="submit" class="btn btn-primary" id="btn-auth-submit" style="font-size: 0.75rem; padding: 0.45rem; margin: 0; width: 100%; border-radius: 6px;">登入</button>
+            <div class="auth-toggle-tip" style="font-size: 0.65rem; text-align: center; width: 100%;">
+              <span id="auth-toggle-text" style="color: var(--text-muted);">沒有帳號？</span>
+              <a href="#" id="link-auth-toggle" style="color: #00f2fe; text-decoration: none;">立即註冊</a>
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- 隱藏控制項，確保 app.js 不會因為 DOM 遺失而噴錯 -->
+    <div style="display: none !important;">
+      <span id="status-text"></span>
+      <select id="text-target-select"></select>
+      <select id="file-target-select"></select>
+      <input type="file" id="file-input">
+      <div id="text-history-list"></div>
+      <div id="shared-file-list"></div>
+      <div id="connection-info"></div>
+      <button id="btn-open-widget"></button>
+    </div>
+  </div>
+
+  <!-- Toast 通知容器 (widget 模式必備) -->
+  <div id="toast-container" style="position: fixed; bottom: 1rem; right: 0.5rem; left: 0.5rem; z-index: 9999; display: flex; flex-direction: column; gap: 0.35rem; pointer-events: none;"></div>
+
+  <!-- 下載中遮罩 -->
+  <div id="download-overlay" style="display:none; position:fixed; inset:0; z-index:5000; background:rgba(10,15,30,0.75); backdrop-filter:blur(4px); align-items:center; justify-content:center; flex-direction:column; gap:0.5rem;">
+    <div style="width:36px;height:36px;border:3px solid rgba(0,242,254,0.2);border-top-color:#00f2fe;border-radius:50%;animation:spin 0.8s linear infinite;"></div>
+    <span style="font-size:0.75rem;color:#00f2fe;">正在下載...</span>
+  </div>
+  <style>
+    @keyframes spin { to { transform: rotate(360deg); } }
+    /* Toast 樣式覆蓋確保在深色小工具中可見 */
+    #toast-container .toast {
+      background: rgba(15,23,42,0.97) !important;
+      border: 1px solid rgba(0,242,254,0.2) !important;
+      border-radius: 8px !important;
+      padding: 0.4rem 0.7rem !important;
+      font-size: 0.7rem !important;
+      color: #e2e8f0 !important;
+      display: flex !important;
+      align-items: center !important;
+      gap: 0.35rem !important;
+      pointer-events: auto !important;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.5) !important;
+    }
+    #toast-container .toast.success { border-left: 3px solid #22c55e !important; }
+    #toast-container .toast.error   { border-left: 3px solid #ef4444 !important; }
+    #toast-container .toast.info    { border-left: 3px solid #00f2fe !important; }
+    #toast-container .toast.warning { border-left: 3px solid #f59e0b !important; }
+  </style>
+
+  <!-- JS Controller -->
+  <script src="app.js"></script>
+</body>
+</html>

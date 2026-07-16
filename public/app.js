@@ -1,3 +1,26 @@
+// 判定 API 伺服器主機位址 (Tauri 客戶端中會自動連線到您的 VDS 公網伺服器，網頁中則自動連線到當前主機)
+const REMOTE_SERVER = 'http://159.223.86.218:5001';
+let SERVER_HOST = '';
+{
+  const h = window.location.hostname;
+  const proto = window.location.protocol;
+  // Tauri 生產版本使用 tauri://localhost，開發版使用 tauri.localhost (http)
+  if (h === 'tauri.localhost' || proto === 'tauri:' || proto === 'file:') {
+    SERVER_HOST = REMOTE_SERVER;
+  } else {
+    SERVER_HOST = window.location.origin;
+  }
+}
+
+// 產生帶有 ?username= 的 API URL，用於繞過 SameSite Cookie 跨域限制
+// 在 HTTP（非 HTTPS）環境下，Set-Cookie SameSite=None 無法生效，
+// 改以 query string 攜帶身份，伺服器的 getUsernameFromReq() 已支援此方式
+function apiUrl(path) {
+  const user = currentUser || '';
+  const sep = path.includes('?') ? '&' : '?';
+  return SERVER_HOST + path + (user ? sep + 'username=' + encodeURIComponent(user) : '');
+}
+
 // 全局變數
 let socket;
 let clientId = null;
@@ -57,6 +80,7 @@ const widgetBtnCopy = document.getElementById('widget-btn-copy');
 const widgetBtnOpen = document.getElementById('widget-btn-open');
 const widgetHistoryDropdown = document.getElementById('widget-history-dropdown');
 const widgetHistoryList = document.getElementById('widget-history-list');
+const windowCloseBtn = document.getElementById('window-close-btn');
 
 // Widget Tabs DOM
 const tabBtnSend = document.getElementById('tab-btn-send');
@@ -90,16 +114,29 @@ const authToggleText = document.getElementById('auth-toggle-text');
 const authModalTitle = document.getElementById('auth-modal-title');
 const deviceDropdown = document.getElementById('device-dropdown');
 const deviceListContainer = document.getElementById('device-list-container');
+const widgetStatusBar = document.getElementById('widget-status-bar');
 
+// 裝置清單下拉與外部點擊關閉
 // 裝置清單下拉與外部點擊關閉
 if (peerCountBadge && deviceDropdown) {
   peerCountBadge.addEventListener('click', (e) => {
     e.stopPropagation();
     deviceDropdown.classList.toggle('active');
+    
+    // 小工具模式下的動態高度調整
+    if (isWidgetMode) {
+      fitWindowToContent();
+    }
   });
+  
   document.addEventListener('click', () => {
     deviceDropdown.classList.remove('active');
+    // 外部點擊收起時自適應調整
+    if (isWidgetMode) {
+      fitWindowToContent();
+    }
   });
+  
   deviceDropdown.addEventListener('click', (e) => {
     e.stopPropagation();
   });
@@ -133,17 +170,23 @@ if (btnAuthSubmit) {
     const password = authInputPass.value;
     if (!username || !password) return;
 
-    const url = isRegistering ? '/api/auth/register' : '/api/auth/login';
+    // login/register 不能用 apiUrl() 因為 currentUser 還不存在，直接帶 username 在 body 即可
+    const url = SERVER_HOST + (isRegistering ? '/api/auth/register' : '/api/auth/login');
     try {
       const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password })
+        body: JSON.stringify({ username, password }),
+        credentials: 'include'
       });
       const data = await res.json();
       if (res.ok && data.success) {
         currentUser = data.username;
         authModal.classList.add('hidden');
+        if (isWidgetMode) {
+          if (widgetStatusBar) widgetStatusBar.style.display = 'flex';
+          fitWindowToContent();
+        }
         showToast(isRegistering ? '註冊成功並登入' : '登入成功', 'success');
         
         // 更新 UI 顯示
@@ -168,7 +211,7 @@ if (btnAuthLogout) {
   btnAuthLogout.addEventListener('click', async (e) => {
     e.preventDefault();
     try {
-      await fetch('/api/auth/logout', { method: 'POST' });
+      await fetch(apiUrl('/api/auth/logout'), { method: 'POST' });
       currentUser = null;
       authDisplayName.textContent = '未登入';
       btnAuthLogout.style.display = 'none';
@@ -183,22 +226,39 @@ if (btnAuthLogout) {
 // 檢查使用者認證狀態
 async function checkAuthStatus() {
   try {
-    const res = await fetch('/api/auth/me');
+    const res = await fetch(apiUrl('/api/auth/me'));
     const data = await res.json();
     if (data.loggedIn) {
       currentUser = data.username;
       authDisplayName.textContent = currentUser;
       btnAuthLogout.style.display = 'inline';
       authModal.classList.add('hidden');
+      if (isWidgetMode) {
+        if (widgetStatusBar) widgetStatusBar.style.display = 'flex';
+        fitWindowToContent();
+      }
       initWebSocket();
     } else {
       currentUser = null;
       authDisplayName.textContent = '未登入';
       btnAuthLogout.style.display = 'none';
       authModal.classList.remove('hidden');
+      if (isWidgetMode) {
+        if (widgetStatusBar) widgetStatusBar.style.display = 'none';
+        fitWindowToContent(); // 自動貼合登入 Modal 高度
+      }
     }
   } catch (err) {
     console.error('Check auth failed:', err);
+    // 連線/跨域失敗時的安全性降級處理：彈出登入畫面阻斷
+    currentUser = null;
+    authDisplayName.textContent = '連線失敗';
+    btnAuthLogout.style.display = 'none';
+    authModal.classList.remove('hidden');
+    if (isWidgetMode) {
+      if (widgetStatusBar) widgetStatusBar.style.display = 'none';
+      fitWindowToContent();
+    }
   }
 }
 
@@ -212,7 +272,7 @@ function renderDeviceList(peers) {
 
   deviceListContainer.innerHTML = '';
   peers.forEach(peer => {
-    const isSelf = peer.ip === clientId;
+    const isSelf = peer.deviceId === clientId;
     const isOnline = peer.isOnline;
     
     const item = document.createElement('div');
@@ -227,11 +287,11 @@ function renderDeviceList(peers) {
         <span class="device-ip">${peer.ip}</span>
       </div>
       <div class="device-actions">
-        <button class="btn-icon btn-rename-device" data-ip="${peer.ip}" data-name="${peer.name}" title="修改暱稱">
+        <button class="btn-icon btn-rename-device" data-id="${peer.deviceId}" data-name="${peer.name}" title="修改暱稱">
           <i data-lucide="edit-3"></i>
         </button>
         ${!isSelf ? `
-          <button class="btn-icon btn-delete-device" data-ip="${peer.ip}" title="刪除裝置">
+          <button class="btn-icon btn-delete-device" data-id="${peer.deviceId}" title="刪除裝置">
             <i data-lucide="trash-2"></i>
           </button>
         ` : ''}
@@ -244,46 +304,47 @@ function renderDeviceList(peers) {
 
   // 綁定暱稱修改事件
   deviceListContainer.querySelectorAll('.btn-rename-device').forEach(btn => {
-    btn.addEventListener('click', async (e) => {
+    btn.addEventListener('click', (e) => {
       e.stopPropagation();
-      const ip = btn.getAttribute('data-ip');
+      const deviceId = btn.getAttribute('data-id');
       const oldName = btn.getAttribute('data-name');
-      const newName = prompt('請輸入新的裝置暱稱:', oldName);
-      if (newName && newName.trim() && newName !== oldName) {
-        try {
-          const res = await fetch('/api/auth/device/rename', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ip, name: newName.trim() })
-          });
-          const data = await res.json();
-          if (data.success) {
-            showToast('暱稱修改成功', 'success');
-            if (ip === clientId && localNicknameInput) {
-              localNicknameInput.value = newName.trim();
-              myNickname = newName.trim();
+      showCustomPromptModal('修改裝置名稱', '請輸入新的裝置暱稱:', oldName, async (newName) => {
+        if (newName && newName.trim() && newName !== oldName) {
+          try {
+            const res = await fetch(apiUrl('/api/auth/device/rename'), {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ deviceId, name: newName.trim() })
+            });
+            const data = await res.json();
+            if (data.success) {
+              showToast('暱稱修改成功', 'success');
+              if (deviceId === clientId && localNicknameInput) {
+                localNicknameInput.value = newName.trim();
+                myNickname = newName.trim();
+              }
+            } else {
+              showToast(data.error || '暱稱修改失敗', 'error');
             }
-          } else {
-            showToast(data.error || '暱稱修改失敗', 'error');
+          } catch (err) {
+            console.error(err);
           }
-        } catch (err) {
-          console.error(err);
         }
-      }
+      });
     });
   });
 
   // 綁定刪除裝置事件
   deviceListContainer.querySelectorAll('.btn-delete-device').forEach(btn => {
-    btn.addEventListener('click', async (e) => {
+    btn.addEventListener('click', (e) => {
       e.stopPropagation();
-      const ip = btn.getAttribute('data-ip');
-      if (confirm(`確認要解綁並刪除 IP 為 \${ip} 的裝置嗎？`)) {
+      const deviceId = btn.getAttribute('data-id');
+      showCustomConfirmModal('解綁裝置', `確認要解綁並刪除該裝置嗎？`, async () => {
         try {
-          const res = await fetch('/api/auth/device/delete', {
+          const res = await fetch(apiUrl('/api/auth/device/delete'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ip })
+            body: JSON.stringify({ deviceId })
           });
           const data = await res.json();
           if (data.success) {
@@ -294,20 +355,43 @@ function renderDeviceList(peers) {
         } catch (err) {
           console.error(err);
         }
-      }
+      });
     });
   });
 }
 
 // 1. 初始化與模式判斷
 const urlParams = new URLSearchParams(window.location.search);
-const isWidgetMode = urlParams.get('mode') === 'widget' || window.innerWidth < 450;
+const isWidgetMode = urlParams.get('mode') === 'widget' || window.innerWidth < 450 || window.location.pathname.includes('widget.html');
+
+// Tauri 視窗自適應大小伸縮 (無邊框且防止網頁內容被視窗邊界截斷)
+function tauriResizeWindow(height) {
+  if (window.__TAURI__ && window.__TAURI__.core) {
+    window.__TAURI__.core.invoke('resize_window', { height: height });
+  }
+}
+
+// 根據 DOM 實際渲染高度，自動調整 OS 視窗高度 (100% 解決硬編碼截斷問題)
+function fitWindowToContent() {
+  if (isWidgetMode && window.__TAURI__) {
+    // 延遲 50ms 確保 DOM layout 已經重新計算完成
+    setTimeout(() => {
+      const container = document.getElementById('app');
+      if (container) {
+        // 取得 app 容器的真實物理高度
+        const height = Math.ceil(container.getBoundingClientRect().height);
+        tauriResizeWindow(height);
+      }
+    }, 50);
+  }
+}
 
 if (isWidgetMode) {
   document.body.classList.add('widget-mode');
   document.body.classList.add('tab-send'); // 預設為傳送分頁
   if (modeBadge) modeBadge.textContent = '懸浮小工具';
   if (textInput) textInput.setAttribute('rows', '1');
+  fitWindowToContent(); // 啟動時根據 DOM 內容自動調整高度
 }
 
 // 監聽視窗調整
@@ -338,6 +422,8 @@ if (isWidgetMode && tabBtnSend && tabBtnReceive) {
     tabBtnReceive.classList.remove('active');
     document.body.classList.remove('tab-receive');
     document.body.classList.add('tab-send');
+    if (deviceDropdown) deviceDropdown.classList.remove('active');
+    fitWindowToContent(); // 自動貼合傳送內容高度
   });
 
   tabBtnReceive.addEventListener('click', () => {
@@ -348,7 +434,21 @@ if (isWidgetMode && tabBtnSend && tabBtnReceive) {
     if (unreadDot) {
       unreadDot.classList.add('hidden'); // 切換到接收頁即清除未讀紅點
     }
+    if (deviceDropdown) deviceDropdown.classList.remove('active');
     updateWidgetOnDataChange(); // 切換時主動刷新與重算狀態
+    fitWindowToContent(); // 自動貼合接收內容高度
+  });
+}
+
+// 小工具關閉按鈕事件監聽 (Tauri 全域 API 關閉視窗)
+if (windowCloseBtn) {
+  windowCloseBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (window.__TAURI__ && window.__TAURI__.core) {
+      window.__TAURI__.core.invoke('close_window');
+    } else {
+      window.close();
+    }
   });
 }
 
@@ -435,7 +535,12 @@ function generateDefaultNickname() {
   else if (ua.indexOf("iPhone") !== -1 || ua.indexOf("iPad") !== -1) os = "iOS";
   
   const randId = Math.floor(1000 + Math.random() * 9000);
-  return `${os}-${randId}`;
+  // 依據是否為小工具模式，自動為預設名稱加上後綴，讓使用者能一秒看清 Chrome 與桌面端的區別
+  if (isWidgetMode) {
+    return `${os}-Widget-${randId}`;
+  } else {
+    return `${os}-Web-${randId}`;
+  }
 }
 
 function sendNicknameUpdate(nickname) {
@@ -456,14 +561,15 @@ function getPeerNickname(id) {
 // 4. 建立 WebSocket 連線與 Signaling
 function initWebSocket() {
   const deviceId = getOrCreateDeviceId();
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsUrl = `${protocol}//${window.location.host}/?deviceId=${deviceId}&username=${encodeURIComponent(currentUser || '')}&nickname=${encodeURIComponent(myNickname)}`;
+  const wsProtocol = SERVER_HOST.startsWith('https:') ? 'wss:' : 'ws:';
+  const wsHost = SERVER_HOST.replace(/^https?:\/\//, '');
+  const wsUrl = `${wsProtocol}//${wsHost}/?deviceId=${deviceId}&username=${encodeURIComponent(currentUser || '')}&nickname=${encodeURIComponent(myNickname)}`;
   
   socket = new WebSocket(wsUrl);
 
   socket.onopen = () => {
     updateStatus('online', '已連線至伺服器');
-    connectionInfo.textContent = `Server: ${window.location.host}`;
+    connectionInfo.textContent = `Server: ${wsHost}`;
   };
 
   socket.onclose = () => {
@@ -485,6 +591,10 @@ function initWebSocket() {
       authDisplayName.textContent = '未登入';
       btnAuthLogout.style.display = 'none';
       authModal.classList.remove('hidden');
+      if (isWidgetMode) {
+        if (widgetStatusBar) widgetStatusBar.style.display = 'none';
+        fitWindowToContent();
+      }
       if (socket) socket.close();
       return;
     }
@@ -1198,6 +1308,7 @@ function updateWidgetOnDataChange() {
       widgetBtnCopy.style.display = 'none';
       widgetBtnOpen.style.display = 'none';
     }
+    fitWindowToContent();
     return;
   }
 
@@ -1210,6 +1321,7 @@ function updateWidgetOnDataChange() {
   } else {
     updateWidgetActiveCard(latest.data);
   }
+  fitWindowToContent();
 }
 
 // 渲染小工具專用「最新收到卡片」
@@ -1240,7 +1352,8 @@ function updateWidgetActiveCard(item) {
   const newCopyBtn = widgetBtnCopy.cloneNode(true);
   widgetBtnCopy.parentNode.replaceChild(newCopyBtn, widgetBtnCopy);
   newCopyBtn.addEventListener('click', () => {
-    navigator.clipboard.writeText(item.text).then(() => {
+    copyTextToClipboard(item.text).then(() => {
+      showToast('已複製到剪貼簿！', 'success');
       const icon = newCopyBtn.querySelector('i');
       icon.setAttribute('data-lucide', 'check');
       lucide.createIcons();
@@ -1273,7 +1386,7 @@ function updateWidgetActiveCardWithFile(file) {
   widgetBtnCopy.style.display = 'none';
 
   widgetBtnOpen.style.display = 'inline-flex';
-  widgetBtnOpen.href = `/api/download/${file.filename}`;
+  widgetBtnOpen.href = apiUrl(`/api/download/${file.filename}`);
   widgetBtnOpen.setAttribute('download', file.originalName);
   widgetBtnOpen.setAttribute('title', '下載並從伺服器刪除');
   
@@ -1347,7 +1460,8 @@ function createTextCard(item) {
   `;
 
   card.querySelector('.btn-copy').addEventListener('click', () => {
-    navigator.clipboard.writeText(item.text).then(() => {
+    copyTextToClipboard(item.text).then(() => {
+      showToast('已複製到剪貼簿！', 'success');
       const copyIcon = card.querySelector('.btn-copy i');
       copyIcon.setAttribute('data-lucide', 'check');
       lucide.createIcons();
@@ -1445,7 +1559,7 @@ function renderWidgetHistoryList() {
 
       div.querySelector('.btn-hist-copy').addEventListener('click', (e) => {
         e.stopPropagation();
-        navigator.clipboard.writeText(item.text).then(() => {
+        copyTextToClipboard(item.text).then(() => {
           showToast('已複製到剪貼簿！', 'success');
         });
       });
@@ -1472,24 +1586,17 @@ function renderWidgetHistoryList() {
           <div class="widget-hist-meta">${displayTime} &bull; 暫存 (${formatBytes(item.size)})</div>
         </div>
         <div class="widget-hist-actions">
-          <a href="/api/download/${item.filename}" class="btn-icon" download="${escapeHtml(item.text)}" title="下載並從伺服器刪除">
+          <button class="btn-icon btn-dl-server" data-url="${apiUrl('/api/download/' + item.filename)}" data-name="${escapeHtml(item.text)}" title="下載並從伺服器刪除">
             <i data-lucide="download"></i>
-          </a>
+          </button>
         </div>
       `;
       
-      const dlBtn = div.querySelector('a');
+      const dlBtn = div.querySelector('.btn-dl-server');
       if (dlBtn) {
         dlBtn.addEventListener('click', (e) => {
           e.stopPropagation();
-          if (isWidgetMode && window.pywebview && window.pywebview.api) {
-            e.preventDefault();
-            const downloadName = dlBtn.getAttribute('download') || item.text;
-            const rawUrl = dlBtn.getAttribute('href');
-            const sep = rawUrl.includes('?') ? '&' : '?';
-            const authenticatedUrl = `${rawUrl}${sep}username=${encodeURIComponent(currentUser || '')}`;
-            window.pywebview.api.download_file_via_python(authenticatedUrl, downloadName);
-          }
+          downloadFromServer(dlBtn.dataset.url, dlBtn.dataset.name);
         });
       }
     }
@@ -1537,14 +1644,20 @@ function updateFileList(files) {
         </div>
       </div>
       <div class="card-actions">
-        <a href="/api/download/${file.filename}" class="btn-icon" download title="下載並從伺服器刪除">
+        <button class="btn-icon btn-dl-server" data-url="${apiUrl('/api/download/' + file.filename)}" data-name="${escapeHtml(file.originalName)}" title="下載並從伺服器刪除">
           <i data-lucide="download"></i>
-        </a>
+        </button>
         <button class="btn-icon btn-icon-danger btn-delete-file" title="刪除檔案">
           <i data-lucide="trash-2"></i>
         </button>
       </div>
     `;
+
+    card.querySelector('.btn-dl-server').addEventListener('click', (e) => {
+      e.stopPropagation();
+      const btn = e.currentTarget;
+      downloadFromServer(btn.dataset.url, btn.dataset.name);
+    });
 
     card.querySelector('.btn-delete-file').addEventListener('click', () => {
       if (socket && socket.readyState === WebSocket.OPEN) {
@@ -1642,7 +1755,8 @@ function uploadFileToServer(file) {
   formData.append('file', file);
 
   const xhr = new XMLHttpRequest();
-  xhr.open('POST', '/api/upload', true);
+  xhr.withCredentials = true;
+  xhr.open('POST', apiUrl('/api/upload'), true);
 
   showProgressUI(file.name);
   showToast('正在上傳檔案至伺服器...', 'info');
@@ -1669,6 +1783,40 @@ function uploadFileToServer(file) {
   };
 
   xhr.send(formData);
+}
+
+// 跨瀏覽器複製剪貼簿支援 (包含在公網 HTTP 等非安全上下文環境下使用的 execCommand 後備方案)
+function copyTextToClipboard(text) {
+  return new Promise((resolve, reject) => {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(resolve).catch(err => {
+        fallbackCopyText(text) ? resolve() : reject(err);
+      });
+    } else {
+      fallbackCopyText(text) ? resolve() : reject(new Error('Copy not supported'));
+    }
+  });
+}
+
+function fallbackCopyText(text) {
+  const textArea = document.createElement('textarea');
+  textArea.value = text;
+  textArea.style.top = '0';
+  textArea.style.left = '0';
+  textArea.style.position = 'fixed';
+  textArea.style.opacity = '0';
+  document.body.appendChild(textArea);
+  textArea.focus();
+  textArea.select();
+  try {
+    const successful = document.execCommand('copy');
+    document.body.removeChild(textArea);
+    return successful;
+  } catch (err) {
+    console.error('Fallback copy failed:', err);
+    document.body.removeChild(textArea);
+    return false;
+  }
 }
 
 // 9. 輔助功能
@@ -1703,7 +1851,13 @@ function formatBytes(bytes, decimals = 2) {
 
 // 10. 啟動與暱稱及認證初始化
 initLocalNickname();
-checkAuthStatus();
+// 在 Tauri 獨立執行檔中，WebView2 需要一小段時間完成初始化後才能 fetch
+// 若立即呼叫會觸發短暫的「無法連線」錯誤畫面，延遲 600ms 可完全避免
+if (window.location.hostname === 'tauri.localhost' || window.location.protocol === 'tauri:') {
+  setTimeout(checkAuthStatus, 600);
+} else {
+  checkAuthStatus();
+}
 
 // 註冊 Service Worker
 if ('serviceWorker' in navigator) {
@@ -1714,24 +1868,47 @@ if ('serviceWorker' in navigator) {
   });
 }
 
-// 全域監聽小工具打開/下載按鈕，優先使用 Python JS API 喚醒系統外部瀏覽器進行下載/開啟
+// 通用：從伺服器安全下載檔案 (使用 fetch + Blob，確保 Cookie 跨域正確傳送，且不觸發 WebView2 導航)
+async function downloadFromServer(url, filename) {
+  try {
+    showToast('正在下載...', 'info');
+    const res = await fetch(url, { credentials: 'include' });
+    if (!res.ok) {
+      showToast('下載失敗：' + res.status, 'error');
+      return;
+    }
+    const blob = await res.blob();
+    const blobUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = blobUrl;
+    a.download = filename || 'download';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+    showToast('下載成功', 'success');
+  } catch (err) {
+    console.error('Download failed:', err);
+    showToast('下載失敗', 'error');
+  }
+}
+
+// 全域監聽小工具打開/下載按鈕
 if (widgetBtnOpen) {
   widgetBtnOpen.addEventListener('click', (e) => {
-    if (isWidgetMode && window.pywebview && window.pywebview.api) {
-      const href = widgetBtnOpen.getAttribute('href');
-      if (href && !href.startsWith('#') && href !== '') {
-        e.preventDefault();
-        
-        // 分流：如果有 download 屬性，走 python 默默下載
-        if (widgetBtnOpen.hasAttribute('download')) {
-          const downloadName = widgetBtnOpen.getAttribute('download') || 'downloaded_file';
-          const sep = href.includes('?') ? '&' : '?';
-          const authenticatedUrl = `${href}${sep}username=${encodeURIComponent(currentUser || '')}`;
-          window.pywebview.api.download_file_via_python(authenticatedUrl, downloadName);
-        } else {
-          // 否則走外部瀏覽器開啟 (如開啟網址)
-          window.pywebview.api.open_in_browser(href);
-        }
+    const href = widgetBtnOpen.getAttribute('href');
+    if (!href || href.startsWith('#') || href === '') return;
+    e.preventDefault();
+    // 如果是下載按鈕（有 download 屬性），用 fetch+Blob 下載
+    if (widgetBtnOpen.hasAttribute('download')) {
+      const downloadName = widgetBtnOpen.getAttribute('download') || 'downloaded_file';
+      downloadFromServer(href, downloadName);
+    } else {
+      // 否則在外部瀏覽器中開啟（如開啟網址）
+      if (window.pywebview && window.pywebview.api) {
+        window.pywebview.api.open_in_browser(href);
+      } else {
+        window.open(href, '_blank');
       }
     }
   });
@@ -1739,6 +1916,10 @@ if (widgetBtnOpen) {
 
 // 實作自訂的 P2P 傳輸確認對話框 (防止 WebView2 系統 Confirm 對話框在超小視窗下被截斷)
 function showP2pConfirmModal(sender, filename, size, onAccept, onReject) {
+  if (isWidgetMode) {
+    fitWindowToContent(); // 彈出確認視窗時，自動自適應
+  }
+
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.style.zIndex = '2500'; // 確保超越一切圖層在最最上層
@@ -1767,13 +1948,125 @@ function showP2pConfirmModal(sender, filename, size, onAccept, onReject) {
   document.body.appendChild(overlay);
   lucide.createIcons();
 
+  const restoreWindowSize = () => {
+    if (isWidgetMode) {
+      fitWindowToContent(); // 關閉時自動還原高度
+    }
+  };
+
   overlay.querySelector('#btn-p2p-accept').addEventListener('click', () => {
     overlay.remove();
+    restoreWindowSize();
     onAccept();
   });
 
   overlay.querySelector('#btn-p2p-reject').addEventListener('click', () => {
     overlay.remove();
+    restoreWindowSize();
     onReject();
   });
+}
+
+// 實作自訂的高質感 Prompt 對話框 (消除 tauri.localhost 網頁提示框的違和感)
+function showCustomPromptModal(title, text, defaultValue, onConfirm) {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.style.zIndex = '2600';
+
+  const safeTitle = escapeHtml(title);
+  const safeText = escapeHtml(text);
+  const safeDefault = escapeHtml(defaultValue);
+
+  overlay.innerHTML = `
+    <div class="modal-content glass-card" style="width: 260px; max-width: 90%; padding: 1rem; border-radius: 12px; background: rgba(15,23,42,0.98); border: 1px solid rgba(0,242,254,0.3); box-shadow: 0 10px 30px rgba(0,0,0,0.7);">
+      <div class="modal-header" style="margin-bottom: 0.8rem;">
+        <h3 style="font-size: 0.85rem; color: #00f2fe; display: flex; align-items: center; gap: 0.4rem; margin: 0;">
+          <i data-lucide="edit-3" style="width:14px;height:14px;"></i> ${safeTitle}
+        </h3>
+      </div>
+      <div class="modal-body" style="padding: 0; display: flex; flex-direction: column; gap: 0.5rem;">
+        <p style="margin: 0; font-size: 0.75rem; color: var(--text-color);">${safeText}</p>
+        <input type="text" id="custom-prompt-input" value="${safeDefault}" style="width: 100%; box-sizing: border-box; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; color: #fff; padding: 0.4rem 0.6rem; font-size: 0.75rem; outline: none; transition: border-color 0.2s;" onfocus="this.style.borderColor='#00f2fe'" onblur="this.style.borderColor='rgba(255,255,255,0.08)'">
+        <div style="display: flex; gap: 0.4rem; margin-top: 0.2rem;">
+          <button class="btn btn-secondary" id="btn-prompt-cancel" style="flex: 1; padding: 0.35rem; font-size: 0.75rem; margin: 0;">取消</button>
+          <button class="btn btn-primary" id="btn-prompt-confirm" style="flex: 1; padding: 0.35rem; font-size: 0.75rem; margin: 0;">確定</button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+  lucide.createIcons();
+  
+  if (isWidgetMode) fitWindowToContent();
+
+  const input = overlay.querySelector('#custom-prompt-input');
+  input.focus();
+  input.select();
+
+  const closePrompt = () => {
+    overlay.remove();
+    if (isWidgetMode) fitWindowToContent();
+  };
+
+  overlay.querySelector('#btn-prompt-confirm').addEventListener('click', () => {
+    const val = input.value;
+    closePrompt();
+    onConfirm(val);
+  });
+
+  overlay.querySelector('#btn-prompt-cancel').addEventListener('click', closePrompt);
+  
+  // 綁定 Enter 鍵提交
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      const val = input.value;
+      closePrompt();
+      onConfirm(val);
+    }
+  });
+}
+
+// 實作自訂的高質感 Confirm 對話框
+function showCustomConfirmModal(title, text, onConfirm) {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.style.zIndex = '2600';
+
+  const safeTitle = escapeHtml(title);
+  const safeText = escapeHtml(text);
+
+  overlay.innerHTML = `
+    <div class="modal-content glass-card" style="width: 260px; max-width: 90%; padding: 1rem; border-radius: 12px; background: rgba(15,23,42,0.98); border: 1px solid rgba(0,242,254,0.3); box-shadow: 0 10px 30px rgba(0,0,0,0.7);">
+      <div class="modal-header" style="margin-bottom: 0.8rem;">
+        <h3 style="font-size: 0.85rem; color: #ef4444; display: flex; align-items: center; gap: 0.4rem; margin: 0;">
+          <i data-lucide="alert-triangle" style="width:14px;height:14px;"></i> ${safeTitle}
+        </h3>
+      </div>
+      <div class="modal-body" style="padding: 0; display: flex; flex-direction: column; gap: 0.5rem;">
+        <p style="margin: 0; font-size: 0.75rem; color: var(--text-color);">${safeText}</p>
+        <div style="display: flex; gap: 0.4rem; margin-top: 0.2rem;">
+          <button class="btn btn-secondary" id="btn-confirm-cancel" style="flex: 1; padding: 0.35rem; font-size: 0.75rem; margin: 0;">取消</button>
+          <button class="btn btn-primary" id="btn-confirm-ok" style="flex: 1; padding: 0.35rem; font-size: 0.75rem; margin: 0; background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%) !important; border: none !important; color: #fff !important;">確定</button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+  lucide.createIcons();
+
+  if (isWidgetMode) fitWindowToContent();
+
+  const closeConfirm = () => {
+    overlay.remove();
+    if (isWidgetMode) fitWindowToContent();
+  };
+
+  overlay.querySelector('#btn-confirm-ok').addEventListener('click', () => {
+    closeConfirm();
+    onConfirm();
+  });
+
+  overlay.querySelector('#btn-confirm-cancel').addEventListener('click', closeConfirm);
 }

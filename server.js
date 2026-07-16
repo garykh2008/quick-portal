@@ -111,26 +111,27 @@ function getCleanIp(remoteAddress) {
 }
 
 // 輔助工具：檢查某個已登記的 IP 當前是否在線
-function isDeviceOnline(username, ip) {
+function isDeviceOnline(username, deviceId) {
   let online = false;
   wss.clients.forEach(client => {
-    if (client.readyState === WebSocket.OPEN && client.username === username && client.ip === ip) {
+    if (client.readyState === WebSocket.OPEN && client.username === username && client.deviceId === deviceId) {
       online = true;
     }
   });
   return online;
 }
 
-// 輔助工具：獲取特定使用者的實體裝置清單 (IP 歸戶展示層)
+// 輔助工具：獲取特定使用者的實體裝置清單 (使用 deviceId 歸戶)
 function getUserDeviceList(username) {
   const user = getOrCreateUser(username);
   if (!user) return [];
   const list = [];
-  user.devices.forEach((info, ip) => {
+  user.devices.forEach((info, devId) => {
     list.push({
-      ip,
+      deviceId: devId,
+      ip: info.ip || '127.0.0.1',
       name: info.name,
-      isOnline: isDeviceOnline(username, ip)
+      isOnline: isDeviceOnline(username, devId)
     });
   });
   return list;
@@ -154,7 +155,7 @@ function getUserPeerList(username, excludeDeviceId) {
   if (!user) return [];
   wss.clients.forEach(client => {
     if (client.readyState === WebSocket.OPEN && client.username === username && client.deviceId !== excludeDeviceId) {
-      const deviceName = user.devices.has(client.ip) ? user.devices.get(client.ip).name : 'Device';
+      const deviceName = user.devices.has(client.deviceId) ? user.devices.get(client.deviceId).name : 'Device';
       list.push({
         deviceId: client.deviceId,
         ip: client.ip,
@@ -207,6 +208,22 @@ const storage = multer.diskStorage({
 });
 
 const upload = multer({ storage });
+
+// 允許跨域請求 (特別支援 Tauri 客戶端的 tauri://localhost 連入與 Cookie 傳遞)
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  }
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+});
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
@@ -300,11 +317,11 @@ app.post('/api/auth/device/rename', (req, res) => {
   const username = getUsernameFromReq(req);
   if (!username || !users.has(username)) return res.status(401).json({ error: '請先登入' });
 
-  const { ip, name } = req.body;
-  if (!ip || !name) return res.status(400).json({ error: '缺乏裝置 IP 或名稱' });
+  const { deviceId, name } = req.body;
+  if (!deviceId || !name) return res.status(400).json({ error: '缺乏裝置識別碼或名稱' });
 
   const user = getOrCreateUser(username);
-  const device = user.devices.get(ip);
+  const device = user.devices.get(deviceId);
   if (device) {
     device.name = name;
     device.lastActive = Date.now();
@@ -324,12 +341,12 @@ app.post('/api/auth/device/delete', (req, res) => {
   const username = getUsernameFromReq(req);
   if (!username || !users.has(username)) return res.status(401).json({ error: '請先登入' });
 
-  const { ip } = req.body;
-  if (!ip) return res.status(400).json({ error: '缺乏裝置 IP' });
+  const { deviceId } = req.body;
+  if (!deviceId) return res.status(400).json({ error: '缺乏裝置識別碼' });
 
   const user = getOrCreateUser(username);
-  if (user.devices.has(ip)) {
-    user.devices.delete(ip);
+  if (user.devices.has(deviceId)) {
+    user.devices.delete(deviceId);
 
     // 持久化儲存
     saveUsersToDisk();
@@ -545,8 +562,8 @@ wss.on('connection', (ws, req) => {
 
   const user = getOrCreateUser(username);
 
-  // 如果此 IP 尚未加入註冊裝置中，予以自動登錄
-  if (!user.devices.has(ip)) {
+  // 如果此 deviceId 尚未加入註冊裝置中，予以自動登錄
+  if (!user.devices.has(deviceId)) {
     const lastOctet = ip.split('.').pop() || 'Unknown';
     let userAgent = req.headers['user-agent'] || '';
     let os = 'Device';
@@ -556,18 +573,21 @@ wss.on('connection', (ws, req) => {
     else if (userAgent.includes('Android')) os = 'Android';
     else if (userAgent.includes('iPhone') || userAgent.includes('iPad')) os = 'iOS';
     
-    user.devices.set(ip, {
+    user.devices.set(deviceId, {
       name: `${os}-${lastOctet}`,
+      ip: ip,
       lastActive: Date.now()
     });
 
     // 持久化儲存
     saveUsersToDisk();
   } else {
-    user.devices.get(ip).lastActive = Date.now();
+    const devInfo = user.devices.get(deviceId);
+    devInfo.ip = ip; // 更新最新連線的 IP
+    devInfo.lastActive = Date.now();
   }
 
-  const deviceName = user.devices.get(ip).name;
+  const deviceName = user.devices.get(deviceId).name;
   const activeCount = getActiveDeviceCount(username);
   const devList = getUserDeviceList(username);
 
@@ -591,7 +611,7 @@ wss.on('connection', (ws, req) => {
       const data = JSON.parse(message);
       const user = getOrCreateUser(ws.username);
       if (!user) return;
-      const currentDevice = user.devices.get(ws.ip);
+      const currentDevice = user.devices.get(ws.deviceId);
 
       switch (data.type) {
         case 'client-rename':
