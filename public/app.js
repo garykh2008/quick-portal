@@ -392,6 +392,9 @@ function tauriResizeWindow(height) {
 
 // 根據 DOM 實際渲染高度，自動調整 OS 視窗高度 (100% 解決硬編碼截斷問題)
 function fitWindowToContent() {
+  // 如果處於懸浮球氣泡模式下，嚴禁調整視窗高度，防止氣泡被上下裁剪壓扁！
+  if (document.body.classList.contains('mode-bubble')) return;
+
   if (isWidgetMode && window.__TAURI__) {
     // 延遲 50ms 確保 DOM layout 已經重新計算完成
     setTimeout(() => {
