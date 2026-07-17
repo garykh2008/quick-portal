@@ -81,6 +81,10 @@ const widgetBtnOpen = document.getElementById('widget-btn-open');
 const widgetHistoryDropdown = document.getElementById('widget-history-dropdown');
 const widgetHistoryList = document.getElementById('widget-history-list');
 const windowCloseBtn = document.getElementById('window-close-btn');
+const windowMinimizeBtn = document.getElementById('window-minimize-btn');
+const bubbleContainer = document.getElementById('bubble-container');
+const bubbleInner = document.getElementById('bubble-inner');
+const bubbleBadge = document.getElementById('bubble-badge');
 
 // Widget Tabs DOM
 const tabBtnSend = document.getElementById('tab-btn-send');
@@ -364,6 +368,10 @@ function renderDeviceList(peers) {
 const urlParams = new URLSearchParams(window.location.search);
 const isWidgetMode = urlParams.get('mode') === 'widget' || window.innerWidth < 450 || window.location.pathname.includes('widget.html');
 
+if (isWidgetMode) {
+  document.body.classList.add('tab-send'); // 雙重保險：小工具初始化時為 body 加上預設發送分頁 class，以啟用接收紅點提示
+}
+
 // 如果是在小工具模式下，強力註銷所有已註冊的 Service Worker，並清除其快取，以防 WebView2 載入舊版快取資源或引發自訂協議載入異常
 if (isWidgetMode && 'serviceWorker' in navigator) {
   navigator.serviceWorker.getRegistrations().then(registrations => {
@@ -393,14 +401,14 @@ function fitWindowToContent() {
         // 這 100% 保證啟動與登入期間卡片不會被截斷，且拖曳欄與關閉 X 按鈕完全可見可點選，並保留了優雅對稱的上下呼吸邊界
         const authModal = document.getElementById('auth-modal');
         if (!currentUser || (authModal && !authModal.classList.contains('hidden'))) {
-          console.log('[Tauri Layout] 偵測到處於未登入狀態，強行將視窗高度鎖定在 294px');
-          tauriResizeWindow(294);
+          console.log('[Tauri Layout] 偵測到處於未登入狀態，將視窗高度鎖定在 310px (294px 卡片 + 16px 外縮 margin)');
+          tauriResizeWindow(310);
           return;
         }
-        // 取得 app 容器的真實物理高度
+        // 取得 app 容器的真實物理高度，並加上 16px 的 Margin 緩衝空間防止溢出截斷
         const height = Math.ceil(container.getBoundingClientRect().height);
-        console.log('[Tauri Layout] 偵測到已登入，動態伸縮適應高度為:', height);
-        tauriResizeWindow(height);
+        console.log('[Tauri Layout] 偵測到已登入，動態伸縮適應高度為 (含 margin):', height + 16);
+        tauriResizeWindow(height + 16);
       }
     }, 50);
   }
@@ -451,8 +459,10 @@ if (isWidgetMode && tabBtnSend && tabBtnReceive) {
     tabBtnSend.classList.remove('active');
     document.body.classList.remove('tab-send');
     document.body.classList.add('tab-receive');
-    if (unreadDot) {
-      unreadDot.classList.add('hidden'); // 切換到接收頁即清除未讀紅點
+    const dot = document.getElementById('unread-dot');
+    if (dot) {
+      dot.classList.add('hidden'); // 切換到接收頁即清除未讀紅點
+      dot.style.display = 'none';
     }
     if (deviceDropdown) deviceDropdown.classList.remove('active');
     updateWidgetOnDataChange(); // 切換時主動刷新與重算狀態
@@ -482,19 +492,136 @@ if (windowCloseBtn) {
   console.error('[Tauri Init] 找不到關閉按鈕 DOM (#window-close-btn)！');
 }
 
+// 小工具最小化為懸浮氣泡事件監聽
+if (windowMinimizeBtn) {
+  windowMinimizeBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    try {
+      if (window.__TAURI__ && window.__TAURI__.core) {
+        // 1. 設置視窗為 64x64 像素
+        window.__TAURI__.core.invoke('resize_window', { width: 64, height: 64 });
+        // 2. 設定視窗永遠置頂 (Always on Top)
+        window.__TAURI__.core.invoke('set_always_on_top', { onTop: true });
+        // 3. 切換網頁 class 為氣泡模式
+        document.body.classList.add('mode-bubble');
+        document.documentElement.classList.add('mode-bubble');
+      }
+    } catch (err) {
+      console.error('[Tauri Minimize] 縮小成氣泡失敗:', err);
+    }
+  });
+}
+
+// 點擊懸浮氣泡展開還原事件監聽 (重大重構：採用拖曳與點擊高靈敏度分流算法，徹底解決氣泡點擊不靈敏的問題)
+if (bubbleInner) {
+  let isDragging = false;
+  let startX = 0;
+  let startY = 0;
+
+  bubbleInner.addEventListener('mousedown', (e) => {
+    if (e.buttons === 1) { // 僅限左鍵
+      isDragging = false;
+      startX = e.screenX;
+      startY = e.screenY;
+
+      const onMouseMove = (moveEvent) => {
+        const deltaX = Math.abs(moveEvent.screenX - startX);
+        const deltaY = Math.abs(moveEvent.screenY - startY);
+        // 如果滑鼠位移超過 3 像素，判定為使用者正在拖曳懸浮球
+        if (deltaX > 3 || deltaY > 3) {
+          isDragging = true;
+          window.removeEventListener('mousemove', onMouseMove);
+          try {
+            if (window.__TAURI__ && window.__TAURI__.window) {
+              window.__TAURI__.window.getCurrentWindow().startDragging();
+            }
+          } catch (err) {
+            console.error('[Tauri Drag] 氣泡開始拖曳失敗:', err);
+          }
+        }
+      };
+
+      const onMouseUp = () => {
+        window.removeEventListener('mousemove', onMouseMove);
+        window.removeEventListener('mouseup', onMouseUp);
+        // 如果滑鼠按下到放開期間沒有位移（或是位移極小），100% 判定為點擊展開！
+        if (!isDragging) {
+          console.log('[Tauri Bubble] 檢測到精確輕點，執行展開還原');
+          try {
+            if (window.__TAURI__ && window.__TAURI__.core) {
+              // 1. 取消視窗永遠置頂
+              window.__TAURI__.core.invoke('set_always_on_top', { onTop: false });
+              // 2. 切換網頁 class 為正常模式 (讓 #app 容器顯示)
+              document.body.classList.remove('mode-bubble');
+              document.documentElement.classList.remove('mode-bubble');
+              // 3. 隱藏氣泡上的未讀紅點
+              if (bubbleBadge) {
+                bubbleBadge.classList.add('hidden');
+              }
+              
+              // 4. 預先將視窗擴展至安全的高度，再進行延遲適應重算，解決 Layout Reflow 髒高導致的扁平截斷問題
+              const authModal = document.getElementById('auth-modal');
+              const isNotLoggedIn = !currentUser || (authModal && !authModal.classList.contains('hidden'));
+              
+              if (isNotLoggedIn) {
+                // 未登入：直接還原為穩定的 310px 預設安全高度 (294px 卡片 + 16px margin)
+                window.__TAURI__.core.invoke('resize_window', { width: 320, height: 310 });
+              } else {
+                // 已登入：先撐開為 366px，給予 DOM 180ms 重排時間後再自適應調整 (350px 卡片 + 16px margin)
+                window.__TAURI__.core.invoke('resize_window', { width: 320, height: 366 });
+                setTimeout(() => {
+                  fitWindowToContent();
+                }, 180);
+              }
+            }
+          } catch (err) {
+            console.error('[Tauri Expand] 展開還原視窗失敗:', err);
+          }
+        }
+      };
+
+      window.addEventListener('mousemove', onMouseMove);
+      window.addEventListener('mouseup', onMouseUp);
+    }
+  });
+}
+
 // 未讀通知紅點觸發函式 (加強 log 便於排查)
 function triggerUnreadDot() {
-  console.log(`[Unread] triggerUnreadDot() - isWidgetMode: ${isWidgetMode}, isInitDone: ${isInitDone}, in tab-send: ${document.body.classList.contains('tab-send')}`);
-  if (isWidgetMode && isInitDone && document.body.classList.contains('tab-send')) {
-    if (unreadDot) {
-      unreadDot.classList.remove('hidden');
-      console.log("[Unread] 紅點已顯示");
+  const dot = document.getElementById('unread-dot');
+  const bubbleDot = document.getElementById('bubble-badge');
+  const isTabSend = document.body.classList.contains('tab-send');
+  const isModeBubble = document.body.classList.contains('mode-bubble');
+  
+  console.log(`[Unread] triggerUnreadDot() 被觸發 - isWidgetMode: ${isWidgetMode}, in tab-send: ${isTabSend}`);
+  console.log(`[Unread] dot DOM:`, dot, `bubbleDot DOM:`, bubbleDot);
+
+  if (isWidgetMode) {
+    // 狀況 A：如果處於懸浮球氣泡模式下，顯示氣泡紅色角標
+    if (isModeBubble) {
+      if (bubbleDot) {
+        bubbleDot.classList.remove('hidden');
+        bubbleDot.style.display = 'block';
+        console.log("[Unread] 氣泡紅點已顯示");
+      }
+    }
+    // 狀況 B：如果處於主視窗且在發送頁面，顯示接收按鈕紅點
+    if (isTabSend) {
+      if (dot) {
+        dot.classList.remove('hidden');
+        dot.style.display = 'block';
+        console.log("[Unread] 接收分頁紅點已顯示");
+      }
     }
   }
 }
 
 // 2. Toast 提示通知函式
 function showToast(message, type = 'info') {
+  // 解決小氣泡模式下彈 Toast 的問題 (氣泡太小會導致 Toast 嚴重變形截斷，且會阻擋對氣泡的點擊點選)
+  if (isWidgetMode && document.body.classList.contains('mode-bubble')) {
+    return;
+  }
   if (!toastContainer) return;
   
   const toast = document.createElement('div');
@@ -613,7 +740,13 @@ function initWebSocket() {
   };
 
   socket.onmessage = (event) => {
-    const data = JSON.parse(event.data);
+    let data;
+    try {
+      data = JSON.parse(event.data);
+    } catch (err) {
+      console.error('WebSocket Message parse error:', err);
+      return;
+    }
     
     // 若收到需要認證的訊息，直接彈出 Modal 阻斷
     if (data.type === 'require-auth') {
@@ -660,6 +793,7 @@ function initWebSocket() {
         manageRTCConnections();
         
         isInitDone = true; // 初始化完畢，開始監聽未讀
+        triggerUnreadDot();
         break;
 
       case 'peer-update':
@@ -1379,20 +1513,23 @@ function updateWidgetActiveCard(item) {
     icon.setAttribute('data-lucide', 'external-link');
   }
 
-  const newCopyBtn = widgetBtnCopy.cloneNode(true);
-  widgetBtnCopy.parentNode.replaceChild(newCopyBtn, widgetBtnCopy);
-  newCopyBtn.addEventListener('click', () => {
-    copyTextToClipboard(item.text).then(() => {
-      showToast('已複製到剪貼簿！', 'success');
-      const icon = newCopyBtn.querySelector('i');
-      icon.setAttribute('data-lucide', 'check');
-      lucide.createIcons();
-      setTimeout(() => {
-        icon.setAttribute('data-lucide', 'copy');
+  const currentCopyBtn = document.getElementById('widget-btn-copy');
+  if (currentCopyBtn) {
+    const newCopyBtn = currentCopyBtn.cloneNode(true);
+    currentCopyBtn.parentNode.replaceChild(newCopyBtn, currentCopyBtn);
+    newCopyBtn.addEventListener('click', () => {
+      copyTextToClipboard(item.text).then(() => {
+        showToast('已複製到剪貼簿！', 'success');
+        const icon = newCopyBtn.querySelector('i');
+        icon.setAttribute('data-lucide', 'check');
         lucide.createIcons();
-      }, 1500);
+        setTimeout(() => {
+          icon.setAttribute('data-lucide', 'copy');
+          lucide.createIcons();
+        }, 1500);
+      });
     });
-  });
+  }
 
   const isUrl = isValidUrl(item.text);
   if (isUrl) {
@@ -1883,6 +2020,27 @@ function formatBytes(bytes, decimals = 2) {
 initLocalNickname();
 if (typeof lucide !== 'undefined') {
   lucide.createIcons();
+}
+
+// 解決 Linux (WebKit2GTK) 下 data-tauri-drag-region 無法拖曳視窗的相容性 Bug (呼叫 Tauri 本地視窗拖曳 API)
+if (window.__TAURI__ && window.__TAURI__.window) {
+  try {
+    const { getCurrentWindow } = window.__TAURI__.window;
+    const appWindow = getCurrentWindow();
+    document.querySelectorAll('[data-tauri-drag-region]').forEach(el => {
+      el.addEventListener('mousedown', (e) => {
+        if (e.buttons === 1) { // 左鍵按下時才拖曳
+          // 防呆：點擊到按鈕、輸入框、下拉選單等互動控件時不觸發拖曳
+          if (e.target.closest('button, input, select, textarea, a, .window-close-btn')) {
+            return;
+          }
+          appWindow.startDragging();
+        }
+      });
+    });
+  } catch (err) {
+    console.error('[Tauri Drag] 初始化拖曳事件失敗:', err);
+  }
 }
 // 在 Tauri 獨立執行檔中，WebView2 需要一小段時間完成初始化後才能 fetch
 // 若立即呼叫會觸發短暫的「無法連線」錯誤畫面，延遲 600ms 可完全避免

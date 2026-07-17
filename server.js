@@ -542,8 +542,9 @@ app.get('/api/status', (req, res) => {
 // ==========================================
 
 wss.on('connection', (ws, req) => {
-  const parsedUrl = url.parse(req.url, true);
-  const cookies = parseCookies(req.headers.cookie);
+  try {
+    const parsedUrl = url.parse(req.url, true);
+    const cookies = parseCookies(req.headers.cookie);
   const username = parsedUrl.query.username || cookies.username;
 
   // 若未登入或帳號尚未被正式註冊，通知客戶端需要認證並斷開連線
@@ -713,9 +714,15 @@ wss.on('connection', (ws, req) => {
     }
   });
 
-  ws.on('close', () => {
-    broadcastPeerUpdate(ws.username);
-  });
+    ws.on('close', () => {
+      broadcastPeerUpdate(ws.username);
+    });
+  } catch (err) {
+    console.error('[WS Server Connection Error] 處理連線時崩潰:', err);
+    try {
+      ws.send(JSON.stringify({ type: 'error', message: err.message }));
+    } catch (e) {}
+  }
 });
 
 // 定時排程：每分鐘清除一次超過 15 分鐘的檔案

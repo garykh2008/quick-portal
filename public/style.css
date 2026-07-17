@@ -752,17 +752,29 @@ body.widget-mode .btn {
 }
 
 .select-target {
-  background: rgba(7, 9, 19, 0.7);
+  -webkit-appearance: none !important;
+  -moz-appearance: none !important;
+  appearance: none !important;
+  background-color: #0b0f1e !important;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2300f2fe' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E") !important;
+  background-repeat: no-repeat !important;
+  background-position: right 0.5rem center !important;
+  background-size: 0.8rem !important;
   border: 1px solid var(--border-color);
-  color: var(--text-primary);
+  color: #ffffff !important;
   font-family: var(--font-main);
   font-size: 0.825rem;
-  padding: 0.35rem 0.75rem;
+  padding: 0.35rem 1.6rem 0.35rem 0.6rem !important; /* 為右側箭頭預留空間 */
   border-radius: 8px;
   outline: none;
   cursor: pointer;
   transition: all 0.25s;
   min-width: 140px;
+}
+
+.select-target option {
+  background-color: #0b0f1e !important;
+  color: #ffffff !important;
 }
 
 .select-target:hover, .select-target:focus {
